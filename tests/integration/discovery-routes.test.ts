@@ -94,6 +94,14 @@ describe("POST /api/discovery/start", () => {
     expect(v.rankingChanged).toBe(false);
   });
 
+  it("finishes without asking when adaptive questioning is disabled", async () => {
+    vi.stubEnv("ENABLE_ADAPTIVE_QUESTIONING", "false");
+    const view = await start();
+    expect(view.status).toBe("finished");
+    expect(view.currentQuestion).toBeNull();
+    expect(view.questionCount).toBe(0);
+  });
+
   it("resolves an exact query without an explicit selection", async () => {
     const rest = { ...START_BODY, selectedEntityId: undefined };
     expect((await ok(await startRoute(post("/discovery/start", rest)))).seed.entityId).toBe("mock:movie:interstellar");

@@ -64,7 +64,12 @@ export function rankCandidates(
     return { candidate, score: Math.round(score * 1000) / 1000, positive, rejected };
   });
 
-  scored.sort((a, b) => b.score - a.score || a.candidate.rank - b.candidate.rank);
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.candidate.rank - b.candidate.rank ||
+      a.candidate.entityId.localeCompare(b.candidate.entityId),
+  );
 
   return scored.map((s, index) => {
     const prev = previousOrder ? previousOrder.indexOf(s.candidate.entityId) : -1;

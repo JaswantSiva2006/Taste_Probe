@@ -96,15 +96,18 @@ async function runAgent(
 
   for (let toolCalls = 0; ; ) {
     const ranked = rankCandidates(current.candidates, current.session);
-    const offered = select(
-      availableQuestions(buildQuestionCandidates(current.candidates, current.session.targetType), current.session),
-      ranked,
-    );
+    const questionCandidates = deps.config.features.adaptiveQuestioning
+      ? availableQuestions(buildQuestionCandidates(current.candidates, current.session.targetType), current.session)
+      : [];
+    const offered = select(questionCandidates, ranked, current.session);
+    const stop = deps.config.features.earlyStopping
+      ? evaluateStop(current.session, offered.length)
+      : evaluateStop(current.session, Math.max(1, offered.length));
     const raw = await deps.agent.decide({
       candidateCount: current.candidates.length,
       minCandidates: MIN_CANDIDATES,
       qlooCallsRemaining: limits.maxQlooCallsPerSession - current.session.qlooCallCount,
-      stop: evaluateStop(current.session, offered.length),
+      stop,
       rankedQuestions: offered,
     });
     const decision = validateAgentDecision(raw, offered);

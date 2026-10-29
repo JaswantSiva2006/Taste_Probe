@@ -22,7 +22,7 @@ Discovery service (src/lib/discovery/service.ts)  -- G2 orchestration
    ├─ normalize.ts                         K1 raw payload → public contracts, provenance kept
    ├─ questions.ts                         K2 question builder + D1 selection boundary
    ├─ preferences.ts                       D2 explicit preference updates
-   ├─ ranking.ts                           placeholder reranker (observable movement)
+   ├─ ranking.ts                           bounded deterministic preference reranker
    ├─ stop.ts                              V2 stop controller
    ├─ DiscoveryAgent (src/lib/agent)       A1 deterministic mock agent + decision validator
    └─ session (src/lib/session)            HMAC-signed, expiring session state
@@ -104,6 +104,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `npm run build` | Production build. |
 | `npm run smoke:mock` | HTTP end-to-end smoke test (below). |
 | `npm run smoke:qloo` | Real Qloo-only HTTP smoke: Search, selection validation, Insights, and provenance (3 requests, 0 Gemini calls). |
+| `npm run evaluate:questions` | Offline fixture-backed S5 evaluation with eligible/rejected counts, H/D/I/R/U scores, counterfactual top-five rankings, and runtime. |
 
 Open http://localhost:3000, search **Interstellar**, select it, start discovery, answer a question and
 watch the ▲/▼ markers, then continue or press **Finish now**.
@@ -191,8 +192,13 @@ request), `SESSION_STORE_UNAVAILABLE` (503), and sanitized `QLOO_*` upstream err
 - All entities, books, tags and scores are **synthetic fixtures** (`mock:` IDs, `evidence.source = "mock"`,
   `syntheticScore` instead of `affinity`). They are not Qloo data and make no claim about real works.
 - Only *Interstellar* (and a synthetic sibling) have recommendations, and only for books.
-- The question selector is a **placeholder balance heuristic**, not the information-theoretic optimizer.
-- The reranker is a **placeholder additive adjustment**, not the production scoring equation.
+- The S5 question optimizer is a deterministic engineering heuristic, not calibrated information gain or a
+  measured model of user satisfaction. It scores weighted partition entropy (H), executable counterfactual top-K
+  separation (D), interpretability (I), redundancy (R), and ambiguity (U) as
+  `J = 0.40H + 0.25D + 0.25I - 0.05R - 0.05U` with rank-weight temperature `tau = 3`.
+- Content-tag questions use a conservative verified type/label filter. When no useful tag splits the shortlist,
+  the optimizer asks about pairs of returned entities without inventing semantic contrasts. Counterfactuals use
+  the same bounded additive reranker as the application; its weights remain initial engineering choices.
 - The agent is a **deterministic mock**; no Gemini calls are made.
 - Only tag like/dislike/skip questions are generated; the contracts already allow pair (`prefer_a`/`prefer_b`/
   `both`/`neither`) and entity questions.
@@ -233,7 +239,7 @@ request), `SESSION_STORE_UNAVAILABLE` (503), and sanitized `QLOO_*` upstream err
 | --- | --- | --- |
 | Live Qloo | Implemented in `src/lib/qloo/live-provider.ts` | `QlooProvider` + raw types → `normalize.ts` yields `QlooRecommendationCandidate` (`evidence.source = "qloo"`) |
 | Gemini agent | `createDiscoveryDeps` in `src/lib/discovery/deps.ts` | `DiscoveryAgent.decide` → `AgentDecision`, still passed through `validateAgentDecision` |
-| Question optimizer (S5) | `QuestionSelector` in `src/lib/discovery/questions.ts` | ordered `Question[]` |
+| Question optimizer (S5) | Implemented in `src/lib/discovery/question-optimizer.ts` | ordered grounded `Question[]` plus structured H/D/I/R/U traces |
 | Scoring | `rankCandidates` in `src/lib/discovery/ranking.ts` | `RankedRecommendation[]` |
 | Session store | `getSessionStore` in `src/lib/session/index.ts` | `SessionStore` (create / read / compareAndSwap / expire), canonical `TasteSession` fields |
 | UI | `src/components/*` | HTTP API above |
