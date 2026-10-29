@@ -64,6 +64,38 @@ export const Shelf = (p: IconProps) => (
     <path d="M6 20V6.5M9.5 20V9M13 20V5M16.5 20l2.6-12.5" />
   </Base>
 );
+export const BookOpen = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 6.5c-2-1.6-4.6-2-7.5-1.5v13c2.9-.5 5.5-.1 7.5 1.5 2-1.6 4.6-2 7.5-1.5V5c-2.9-.5-5.5-.1-7.5 1.5z" />
+    <path d="M12 6.5v13" />
+  </Base>
+);
+/** A vinyl record: music artists. */
+export const Vinyl = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <circle cx="12" cy="12" r="5.25" />
+    <circle cx="12" cy="12" r="1.6" />
+  </Base>
+);
+export const Screen = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="3.5" y="5.5" width="17" height="11.5" rx="1.5" />
+    <path d="M9 20.5h6M12 17v3.5" />
+  </Base>
+);
+export const Controller = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M7.5 8h9a4 4 0 0 1 3.9 4.9l-.8 3.4a2.2 2.2 0 0 1-3.9.8L14.3 15H9.7l-1.4 2.1a2.2 2.2 0 0 1-3.9-.8l-.8-3.4A4 4 0 0 1 7.5 8z" />
+    <path d="M8 10.5v3M6.5 12h3M15.5 11.5h.01M17 13h.01" />
+  </Base>
+);
+export const Mic = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="9" y="3.5" width="6" height="11" rx="3" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5" />
+  </Base>
+);
 export const Spark = (p: IconProps) => (
   <Base {...p}>
     <path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4M6.6 6.6l2.2 2.2M15.2 15.2l2.2 2.2M17.4 6.6l-2.2 2.2M8.8 15.2l-2.2 2.2" />

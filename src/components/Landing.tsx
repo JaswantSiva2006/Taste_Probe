@@ -1,12 +1,22 @@
 "use client";
 
 import type { FormEvent } from "react";
-import type { EntitySummary, ProviderMode } from "@/lib/contracts";
-import { ArrowRight, Reel, Search, Shelf, Spark } from "./Icons";
+import type { EntitySummary, ProviderMode, PublicDomainPair } from "@/lib/contracts";
+import { lookOf, sourceChoices, targetChoices, withArticle } from "@/lib/ui/domains";
+import { DomainGlyph } from "./DomainGlyph";
+import { ArrowRight, Check, Refresh, Search, Shelf, Spark } from "./Icons";
 import { ProjectorArt } from "./ProjectorArt";
+
+export type Capabilities = { status: "loading" } | { status: "error" } | { status: "ready"; pairs: PublicDomainPair[] };
 
 type Props = {
   mode: ProviderMode | null;
+  capabilities: Capabilities;
+  onRetryCapabilities: () => void;
+  target: string | null;
+  onTarget: (domain: string) => void;
+  source: string | null;
+  onSource: (domain: string) => void;
   query: string;
   onQuery: (q: string) => void;
   onSearch: () => void;
@@ -17,87 +27,194 @@ type Props = {
   onSelect: (e: EntitySummary) => void;
   onStart: () => void;
   starting: boolean;
+  canStart: boolean;
   busy: boolean;
 };
 
+const joinOr = (items: string[]) => (items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} or ${items.at(-1)}`);
+
 export function Landing(p: Props) {
+  const pairs = p.capabilities.status === "ready" ? p.capabilities.pairs : [];
+  const targets = targetChoices(pairs);
+  const sources = sourceChoices(pairs, p.target);
+  const target = targets.find((t) => t.domain === p.target) ?? null;
+  const source = sources.find((s) => s.domain === p.source) ?? null;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     p.onSearch();
   };
   const startLabel = p.starting
     ? p.mode === "mock"
-      ? "Loading the sample shelf…"
-      : "Asking Qloo for books…"
+      ? `Loading the sample ${target?.pluralLabel ?? "picks"}…`
+      : `Asking Qloo for ${target?.pluralLabel ?? "picks"}…`
     : p.selected
       ? `Begin with ${p.selected.name}`
-      : "Pick your film above";
+      : `Pick your ${source?.label ?? "anchor"} above`;
 
   return (
     <>
       <section className="tp-hero" aria-labelledby="tp-hero-title">
         <div className="tp-hero__copy">
+          <p className="tp-hero__kicker">Your gateway to something new.</p>
           <h1 className="tp-hero__title" id="tp-hero-title">
-            Start with a film you love.
-            <em>Leave with books you didn’t know you’d love.</em>
+            Love something?
+            <em>Discover what comes next.</em>
           </h1>
           <p className="tp-hero__lede">
-            Name one film. TasteProbe asks Qloo which books share its taste, then asks you up to three sharp questions to
-            tune the shelf to you.
+            Choose a cultural world you want to explore and something you already love. TasteProbe asks Qloo where your taste
+            leads, asks up to three sharp questions, and hands you one grounded place to start.
           </p>
 
-          <form className="tp-search" role="search" onSubmit={submit}>
-            <label className="tp-search__label" htmlFor="tp-film">
-              Now showing
-            </label>
-            <div className="tp-search__row">
-              <input
-                id="tp-film"
-                className="tp-search__input"
-                value={p.query}
-                onChange={(e) => p.onQuery(e.target.value)}
-                placeholder="A film you love, e.g. Interstellar"
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={200}
-              />
-              <button type="submit" className="tp-btn tp-btn--amber" disabled={p.busy || !p.query.trim()}>
-                <Search size={18} />
-                <span>{p.searching ? "Searching…" : "Find the film"}</span>
-              </button>
-            </div>
+          <form className="tp-journey" onSubmit={submit} aria-label="Plan your exploration">
+            {/* Step 1: destination, from the server's enabled pairs only */}
+            <fieldset className="tp-step" aria-describedby="tp-step1-help">
+              <legend className="tp-step__legend">
+                <span className="tp-step__num" aria-hidden="true">
+                  1
+                </span>
+                What would you like to explore?
+              </legend>
+              <p className="tp-sr" id="tp-step1-help">
+                Only journeys TasteProbe has verified end to end are listed.
+              </p>
+              {p.capabilities.status === "loading" ? (
+                <p className="tp-step__status" role="status">
+                  <Refresh size={16} className="tp-spin" /> Loading verified journeys…
+                </p>
+              ) : null}
+              {p.capabilities.status === "error" ? (
+                <div className="tp-step__status tp-step__status--error" role="alert">
+                  <span>We couldn’t load the available worlds, so nothing can be chosen yet.</span>
+                  <button type="button" className="tp-btn tp-btn--ghost tp-btn--sm" onClick={p.onRetryCapabilities}>
+                    <Refresh size={16} /> Try again
+                  </button>
+                </div>
+              ) : null}
+              {p.capabilities.status === "ready" && targets.length === 0 ? (
+                <p className="tp-step__status" role="status">
+                  No journeys are enabled on this server right now.
+                </p>
+              ) : null}
+              {targets.length ? (
+                <div className="tp-worlds">
+                  {targets.map((t) => {
+                    const on = t.domain === p.target;
+                    const from = sourceChoices(pairs, t.domain).map((s) => withArticle(s.label));
+                    return (
+                      <label key={t.domain} className={`tp-world${on ? " is-on" : ""}`}>
+                        <input
+                          type="radio"
+                          name="tp-target"
+                          value={t.domain}
+                          className="tp-world__input"
+                          checked={on}
+                          disabled={p.busy}
+                          onChange={() => p.onTarget(t.domain)}
+                        />
+                        <span className="tp-world__glyph" aria-hidden="true">
+                          <DomainGlyph glyph={lookOf(t.domain).glyph} size={30} />
+                        </span>
+                        <span className="tp-world__name">{t.label}</span>
+                        <span className="tp-world__from">Start from {joinOr(from)}</span>
+                        <span className="tp-world__state" aria-hidden="true">
+                          {on ? (
+                            <>
+                              <Check size={14} /> Chosen
+                            </>
+                          ) : (
+                            "Choose"
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </fieldset>
+
+            {/* Step 2: familiar anchor, filtered by the chosen destination */}
+            {target ? (
+              <fieldset className="tp-step tp-step--anchor" key={target.domain}>
+                <legend className="tp-step__legend">
+                  <span className="tp-step__num" aria-hidden="true">
+                    2
+                  </span>
+                  What do you already love?
+                </legend>
+                <div className="tp-sources">
+                  {sources.map((s) => {
+                    const on = s.domain === p.source;
+                    return (
+                      <label key={s.domain} className={`tp-chip${on ? " is-on" : ""}`}>
+                        <input
+                          type="radio"
+                          name="tp-source"
+                          value={s.domain}
+                          className="tp-chip__input"
+                          checked={on}
+                          disabled={p.busy}
+                          onChange={() => p.onSource(s.domain)}
+                        />
+                        <DomainGlyph glyph={lookOf(s.domain).glyph} size={18} />
+                        <span>{withArticle(s.label)}</span>
+                        {on ? <Check size={14} className="tp-chip__check" /> : null}
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {source ? (
+                  <div className="tp-search">
+                    <label className="tp-search__label" htmlFor="tp-anchor">
+                      Name {withArticle(source.label)} you love
+                    </label>
+                    <div className="tp-search__row">
+                      <input
+                        id="tp-anchor"
+                        className="tp-search__input"
+                        value={p.query}
+                        onChange={(e) => p.onQuery(e.target.value)}
+                        placeholder={`Search for ${withArticle(source.label)}`}
+                        autoComplete="off"
+                        spellCheck={false}
+                        maxLength={200}
+                      />
+                      <button type="submit" className="tp-btn tp-btn--amber" disabled={p.busy || !p.query.trim()}>
+                        <Search size={18} />
+                        <span>{p.searching ? "Searching…" : "Find it"}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </fieldset>
+            ) : null}
           </form>
 
           <div className="tp-results" aria-live="polite" aria-busy={p.searching}>
-            {p.results && p.results.length === 0 ? (
+            {source && p.results && p.results.length === 0 ? (
               <p className="tp-results__empty">
-                No films matched “{p.searchedFor}”. Try the original title, or fewer words.
+                No {source.pluralLabel} matched “{p.searchedFor}”. Try the original name, or fewer words.
               </p>
             ) : null}
-            {p.results && p.results.length > 0 ? (
+            {source && p.results && p.results.length > 0 ? (
               <>
                 <p className="tp-results__prompt" id="tp-results-prompt">
-                  {p.results.length === 1 ? "Is this the one?" : `${p.results.length} films match. Which one do you mean?`}
+                  {p.results.length === 1 ? "Is this the one?" : `${p.results.length} matches. Which one do you mean?`}
                 </p>
                 <ul className="tp-tickets" aria-labelledby="tp-results-prompt">
                   {p.results.map((r) => {
                     const on = p.selected?.entityId === r.entityId;
                     return (
                       <li key={r.entityId}>
-                        <button
-                          type="button"
-                          className="tp-ticket"
-                          aria-pressed={on}
-                          disabled={p.busy}
-                          onClick={() => p.onSelect(r)}
-                        >
+                        <button type="button" className="tp-ticket" aria-pressed={on} disabled={p.busy} onClick={() => p.onSelect(r)}>
                           <span className="tp-ticket__stub" aria-hidden="true">
-                            <Reel size={20} />
+                            <DomainGlyph glyph={lookOf(r.entityType).glyph} size={20} />
                           </span>
                           <span className="tp-ticket__body">
                             <span className="tp-ticket__title">{r.name}</span>
                             <span className="tp-ticket__meta">
-                              Film{r.year ? ` · ${r.year}` : ""} · {r.provenance === "mock" ? "synthetic fixture" : "Qloo"}
+                              {source.label[0]!.toUpperCase() + source.label.slice(1)}
+                              {r.year ? ` · ${r.year}` : ""} · {r.provenance === "mock" ? "synthetic fixture" : "Qloo"}
                               <span className="tp-ticket__id"> · ID …{r.entityId.slice(-6)}</span>
                             </span>
                           </span>
@@ -109,10 +226,16 @@ export function Landing(p: Props) {
                     );
                   })}
                 </ul>
-                <button type="button" className="tp-btn tp-btn--amber tp-btn--wide" disabled={!p.selected || p.busy} onClick={p.onStart}>
+                <button type="button" className="tp-btn tp-btn--amber tp-btn--wide" disabled={!p.canStart || p.busy} onClick={p.onStart}>
                   <span>{startLabel}</span>
                   {!p.starting ? <ArrowRight size={18} /> : null}
                 </button>
+                {target ? (
+                  <p className="tp-results__hint">
+                    Next: {p.mode === "mock" ? `synthetic sample ${target.pluralLabel}` : `real ${target.pluralLabel} from Qloo`}, up to three questions, then one
+                    place to start.
+                  </p>
+                ) : null}
               </>
             ) : null}
           </div>
@@ -125,23 +248,23 @@ export function Landing(p: Props) {
 
       <section className="tp-how" aria-labelledby="tp-how-title">
         <h2 className="tp-how__title" id="tp-how-title">
-          How a screening works
+          How an exploration works
         </h2>
         <ol className="tp-how__steps">
           <li>
-            <Reel size={28} />
-            <h3>One film</h3>
-            <p>You pick the exact film, so nothing is guessed.</p>
+            <Spark size={28} />
+            <h3>A world and an anchor</h3>
+            <p>Choose where you want to go, then pick the exact thing you already love, so nothing is guessed.</p>
           </li>
           <li>
-            <Spark size={28} />
+            <Search size={28} />
             <h3>Up to three questions</h3>
-            <p>Each one is chosen because your answer could reorder the shelf. Skip any you’re unsure about.</p>
+            <p>Each is chosen because your answer could reorder what Qloo found. Skip any you’re unsure about.</p>
           </li>
           <li>
             <Shelf size={28} />
-            <h3>Up to five books</h3>
-            <p>Real Qloo recommendations, reordered by what you told it, never by guesses about you.</p>
+            <h3>Your way in</h3>
+            <p>One place to start, with where to go next, each explained only by what Qloo and you actually said.</p>
           </li>
         </ol>
       </section>

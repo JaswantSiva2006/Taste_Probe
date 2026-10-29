@@ -181,7 +181,10 @@ async function runAgent(
       : evaluateStop(current.session, Math.max(1, offered.length));
     const raw = await deps.agent.decide({
       candidateCount: current.candidates.length,
-      minCandidates: MIN_CANDIDATES,
+      // S9.4 fix: after a retrieval this turn, re-requesting the same signals cannot add
+      // candidates, so any verified result is enough to present (the live path behaves
+      // the same way). Without this a one-result anchor looped until the tool budget threw.
+      minCandidates: toolCalls > 0 ? 1 : MIN_CANDIDATES,
       qlooCallsRemaining: limits.maxQlooCallsPerSession - current.session.qlooCallCount,
       stop,
       rankedQuestions: offered,

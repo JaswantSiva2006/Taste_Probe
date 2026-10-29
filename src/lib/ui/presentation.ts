@@ -1,4 +1,12 @@
-import type { DiscoveryView, PreferenceResponse, Question, RankedRecommendation, UpdateMechanism } from "@/lib/contracts";
+import {
+  domainLabel,
+  type DiscoveryPathItem,
+  type DiscoveryView,
+  type PreferenceResponse,
+  type Question,
+  type RankedRecommendation,
+  type UpdateMechanism,
+} from "@/lib/contracts";
 import { isUsefulTag } from "@/lib/discovery/tag-quality";
 
 /**
@@ -135,7 +143,7 @@ export function movementOf(item: RankedRecommendation, hasPrevious: boolean): Mo
   return by > 0 ? { kind: "up", by } : by < 0 ? { kind: "down", by: -by } : { kind: "same", by: 0 };
 }
 
-/** Stable, ID-derived cloth colour for the "no cover from Qloo" fallback board. */
+/** Stable, ID-derived cloth colour for the "no image from Qloo" fallback artwork. */
 const CLOTHS = ["#5b2a2a", "#2f4a4a", "#6a5524", "#2d3550", "#4c3b5a", "#3e4a2c", "#6b3d24", "#23383f"];
 export function clothFor(id: string): string {
   let h = 0;
@@ -158,17 +166,18 @@ export function updateNotice(view: DiscoveryView, names: NameBook): UpdateNotice
   const moved = view.recommendations.filter((r) => r.previousPosition !== null && r.previousPosition !== r.position).length;
   const arrived = view.recommendations.filter((r) => r.previousPosition === null).length;
   const because = becauseOf(view, names);
+  const noun = (n: number) => domainLabel(view.targetType, n !== 1);
   switch (mechanism) {
     case "QLOO_RERETRIEVAL":
       return {
         mechanism,
         title: "Fresh picks from Qloo",
-        detail: `${because} TasteProbe asked Qloo again${arrived ? `; ${arrived} new ${arrived === 1 ? "book" : "books"} arrived` : ""}.`,
+        detail: `${because} TasteProbe asked Qloo again${arrived ? `; ${arrived} new ${noun(arrived)} arrived` : ""}.`,
       };
     case "LOCAL_RERANK":
-      return { mechanism, title: "Your shelf was reordered", detail: `${because} ${moved} ${moved === 1 ? "book" : "books"} changed place.` };
+      return { mechanism, title: "Your picks were reordered", detail: `${because} ${moved} ${noun(moved)} changed place.` };
     case "UNCHANGED":
-      return { mechanism, title: "Your shelf held steady", detail: `${because} The order didn't need to change.` };
+      return { mechanism, title: "Your picks held steady", detail: `${because} The order didn't need to change.` };
     default:
       return null;
   }
@@ -215,11 +224,13 @@ export function finishLine(view: DiscoveryView): string {
   const n = answeredCount(view);
   switch (view.finishReason) {
     case "user_finished":
-      return n === 0 ? "You went straight to the books." : `You ended the screening after ${n} ${n === 1 ? "answer" : "answers"}.`;
+      return n === 0 ? "You went straight to your picks." : `You stopped after ${n} ${n === 1 ? "answer" : "answers"}.`;
     case "question_budget_exhausted":
       return "All three questions answered.";
     case "stable_recommendations":
-      return "Nothing left to ask would have changed your shelf.";
+      return "Nothing left to ask would have changed your picks.";
+    case "insufficient_question_evidence":
+      return "Qloo’s results didn’t carry enough verified detail for a useful question, so none was asked.";
     default:
       return "";
   }
@@ -230,24 +241,33 @@ export function finishLine(view: DiscoveryView): string {
 export type Recovery = "retry" | "restart" | "edit";
 export type FriendlyError = { title: string; body: string; recovery: Recovery };
 
-export function friendlyError(code: string): FriendlyError {
+/** Optional journey context so messages can name what the user actually chose. */
+export type ErrorContext = { sourceLabel?: string; targetLabel?: string };
+
+export function friendlyError(code: string, ctx: ErrorContext = {}): FriendlyError {
+  const anchor = ctx.sourceLabel ?? "pick";
+  const picks = ctx.targetLabel ?? "recommendations";
   switch (code) {
     case "NETWORK_ERROR":
       return { title: "Connection lost", body: "We couldn't reach TasteProbe. Check your connection and try again.", recovery: "retry" };
     case "SESSION_EXPIRED":
-      return { title: "This screening expired", body: "Sessions last 30 minutes. Start a new one with the same film.", recovery: "restart" };
+      return { title: "This exploration expired", body: "Sessions last 30 minutes. Start again with the same choices.", recovery: "restart" };
     case "SESSION_REVISION_CONFLICT":
-      return { title: "This screening moved on", body: "It was updated by another request (perhaps another tab). Start fresh to continue safely.", recovery: "restart" };
+      return { title: "This exploration moved on", body: "It was updated by another request (perhaps another tab). Start fresh to continue safely.", recovery: "restart" };
     case "SESSION_FINISHED":
     case "QUESTION_BUDGET_EXHAUSTED":
     case "QUESTION_MISMATCH":
-      return { title: "That question is closed", body: "This screening has already moved past it.", recovery: "restart" };
+      return { title: "That question is closed", body: "This exploration has already moved past it.", recovery: "restart" };
     case "NO_RECOMMENDATIONS":
-      return { title: "No books for this film", body: "Qloo didn't return any books for it. Try another film.", recovery: "edit" };
+      return { title: `No ${picks} for this ${anchor}`, body: `Qloo didn't return any ${picks} for it. Try a different ${anchor}.`, recovery: "edit" };
+    case "UNSUPPORTED_DOMAIN":
+      return { title: "That combination isn't available yet", body: "Choose one of the destinations and starting points shown on this page.", recovery: "edit" };
+    case "CAPABILITIES_UNAVAILABLE":
+      return { title: "We couldn't load the available worlds", body: "TasteProbe needs the server's list of verified journeys before you can begin.", recovery: "retry" };
     case "ENTITY_NOT_FOUND":
     case "ENTITY_NOT_RESOLVED":
     case "ENTITY_TYPE_MISMATCH":
-      return { title: "We couldn't confirm that film", body: "Search again and pick it from the list.", recovery: "edit" };
+      return { title: `We couldn't confirm that ${anchor}`, body: "Search again and pick it from the list.", recovery: "edit" };
     case "QLOO_RATE_LIMITED":
       return { title: "Qloo is busy", body: "The recommendation service is rate-limiting requests. Wait a moment and try again.", recovery: "retry" };
     case "QLOO_TIMEOUT":
@@ -262,10 +282,55 @@ export function friendlyError(code: string): FriendlyError {
     case "RATE_LIMITED":
       return { title: "Too many requests", body: "TasteProbe is protecting the public demo. Wait a moment, then try again.", recovery: "retry" };
     case "SERVICE_DISABLED":
-      return { title: "New screenings are paused", body: "TasteProbe is temporarily pausing new sessions. Please try again shortly.", recovery: "retry" };
+      return { title: "New explorations are paused", body: "TasteProbe is temporarily pausing new sessions. Please try again shortly.", recovery: "retry" };
     case "VALIDATION_ERROR":
       return { title: "That didn't look right", body: "Check what you typed and try again.", recovery: "edit" };
     default:
       return { title: "Something went wrong", body: "TasteProbe hit an unexpected problem. Try again.", recovery: "retry" };
   }
+}
+
+// ---- Discovery Path (finale) -------------------------------------------------------------------------
+
+/** Display labels for the backend's roles. A role is shown only when the backend returned it. */
+export const ROLE_LABEL: Record<DiscoveryPathItem["role"], string> = {
+  START_HERE: "Start here",
+  EXPLORE_NEXT: "Explore next",
+  ANOTHER_DIRECTION: "Another direction",
+  GO_FURTHER: "Go further",
+};
+
+/** Plain-language basis for an explanation kind; never adds a claim beyond the backend text. */
+export const BASIS_LABEL: Record<DiscoveryPathItem["explanation"]["kind"], string> = {
+  preference_match: "Based on what you told us",
+  metadata_contrast: "Based on Qloo’s tags",
+  source_grounded: "Based on Qloo’s results for your pick",
+};
+
+export type ResolvedPathItem = { item: DiscoveryPathItem; rec: RankedRecommendation };
+
+/**
+ * Resolves the backend Discovery Path against the same response's
+ * recommendations. Order is the backend's; nothing is recalculated. An ID that
+ * does not resolve, or repeats, is dropped rather than rendered.
+ */
+export function resolvePath(view: DiscoveryView): { featured: ResolvedPathItem[]; others: RankedRecommendation[] } | null {
+  const path = view.discoveryPath;
+  if (!path) return null;
+  const byId = new Map(view.recommendations.map((r) => [r.candidate.entityId, r]));
+  const used = new Set<string>();
+  const featured: ResolvedPathItem[] = [];
+  for (const item of path.featured) {
+    const rec = byId.get(item.recommendationEntityId);
+    if (!rec || used.has(item.recommendationEntityId)) continue;
+    used.add(item.recommendationEntityId);
+    featured.push({ item, rec });
+  }
+  const others = path.remainingEntityIds.flatMap((id) => {
+    const rec = byId.get(id);
+    if (!rec || used.has(id)) return [];
+    used.add(id);
+    return [rec];
+  });
+  return { featured, others };
 }

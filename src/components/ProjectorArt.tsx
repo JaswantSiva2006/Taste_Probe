@@ -1,7 +1,8 @@
 /**
  * Signature visual (original SVG): a two-reel film projector throws an amber
- * beam across the room; it lands on, and lights, a shelf of book spines.
- * Film in, books out. Decorative: the headline carries the meaning.
+ * beam across the room; it lands on, and lights, a shelf holding more than one
+ * kind of culture — book spines and a record sleeve with its disc. Something
+ * you love in, somewhere new out. Decorative: the headline carries the meaning.
  */
 
 const SHELF_Y = 360;
@@ -10,11 +11,10 @@ const SPINES: Array<{ x: number; w: number; h: number; fill: string; tilt?: numb
   { x: 462, w: 30, h: 204, fill: "#2f4a4a", band: "#e9d9b8" },
   { x: 494, w: 18, h: 156, fill: "#d9c7a4" },
   { x: 514, w: 26, h: 216, fill: "#6a5524", band: "#f2e8d6" },
-  { x: 542, w: 20, h: 188, fill: "#23383f" },
-  { x: 564, w: 34, h: 170, fill: "#8c3b2a", band: "#e9a43b" },
-  { x: 600, w: 16, h: 198, fill: "#cdbb98" },
-  { x: 624, w: 24, h: 182, fill: "#2d3550", tilt: 9, band: "#c9a25a" },
+  { x: 542, w: 20, h: 188, fill: "#23383f", tilt: -4 },
 ];
+/** A square record sleeve leaning on the shelf, its disc sliding out to the right. */
+const SLEEVE = { x: 568, size: 78 };
 const BEAM = "238,184 664,92 664,358 238,198";
 
 function ReelWheel({ cx, cy }: { cx: number; cy: number }) {
@@ -122,6 +122,17 @@ export function ProjectorArt({ className }: { className?: string }) {
             <rect x={s.x + s.w / 2 - 1.5} y={SHELF_Y - s.h + 34} width="3" height={Math.max(28, s.h * 0.34)} rx="1.5" fill="#f2e8d6" opacity="0.22" />
           </g>
         ))}
+        <g className="tp-art-record">
+          <circle cx={SLEEVE.x + SLEEVE.size - 6} cy={SHELF_Y - SLEEVE.size / 2} r={SLEEVE.size / 2 - 3} fill="#0d0b09" />
+          {[30, 24, 18].map((r) => (
+            <circle key={r} cx={SLEEVE.x + SLEEVE.size - 6} cy={SHELF_Y - SLEEVE.size / 2} r={r} fill="none" stroke="#f2e8d6" strokeOpacity="0.09" />
+          ))}
+          <circle cx={SLEEVE.x + SLEEVE.size - 6} cy={SHELF_Y - SLEEVE.size / 2} r="9" fill="#e9a43b" opacity="0.85" />
+          <rect x={SLEEVE.x} y={SHELF_Y - SLEEVE.size} width={SLEEVE.size} height={SLEEVE.size} rx="1.5" fill="#2d3550" />
+          <rect x={SLEEVE.x} y={SHELF_Y - SLEEVE.size} width={SLEEVE.size} height={SLEEVE.size} rx="1.5" fill="url(#tp-spine-shade)" />
+          <circle cx={SLEEVE.x + SLEEVE.size / 2} cy={SHELF_Y - SLEEVE.size / 2} r="20" fill="none" stroke="#c9a25a" strokeOpacity="0.7" />
+          <rect x={SLEEVE.x + 10} y={SHELF_Y - 16} width="34" height="2" fill="#f2e8d6" opacity="0.35" />
+        </g>
         <rect x="420" y={SHELF_Y} width="246" height="10" fill="#3a3026" />
         <rect x="420" y={SHELF_Y + 10} width="246" height="5" fill="#0b0a08" opacity="0.8" />
       </g>

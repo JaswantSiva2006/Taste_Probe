@@ -2,7 +2,7 @@
 
 import type { DiscoveryView, PreferenceResponse, Question } from "@/lib/contracts";
 import { answerLabel, isSkip, splitTitle, type NameBook } from "@/lib/ui/presentation";
-import { BookCover } from "./BookCover";
+import { EntityArt } from "./EntityArt";
 
 /**
  * The adaptive question as a silent-film intertitle. Keyed by question ID by the
@@ -32,7 +32,7 @@ export function Intertitle({
       ? question.targetIds.map((id) => view.recommendations.find((r) => r.candidate.entityId === id)?.candidate ?? null)
       : [];
   const showPair = pair.length === 2 && Boolean(pair[0] && pair[1]);
-  // Entity comparisons name both books in the approved wording; with the A/B panel
+  // Entity comparisons name both titles in the approved wording; with the A/B panel
   // showing those titles, the heading shows the prompt and keeps the full text for AT.
   const prompt = showPair ? /^(.*?)\s*:\s*“/.exec(question.text)?.[1] : undefined;
 
@@ -60,7 +60,7 @@ export function Intertitle({
           <div className="tp-versus">
             {pair.map((c, i) => (
               <figure key={c!.entityId} className="tp-versus__item">
-                <BookCover id={c!.entityId} name={c!.name} imageUrl={c!.imageUrl} size="sm" />
+                <EntityArt id={c!.entityId} name={c!.name} domain={c!.entityType} imageUrl={c!.imageUrl} size="sm" />
                 <figcaption>
                   <span className="tp-versus__letter">{i === 0 ? "Option A" : "Option B"}</span>
                   {splitTitle(c!.name).title}

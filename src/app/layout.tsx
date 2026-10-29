@@ -7,8 +7,9 @@ const serif = Instrument_Serif({ subsets: ["latin"], weight: "400", style: ["nor
 const sans = Instrument_Sans({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "TasteProbe · From a film you love to books you'll love",
-  description: "Name one film. TasteProbe asks Qloo for books that share its taste, then tunes the shelf with up to three questions.",
+  title: "TasteProbe · Your gateway to something new",
+  description:
+    "Love something? Discover what comes next. Choose a cultural world to explore and something you already love; TasteProbe uses Qloo and up to three questions to find your way in.",
 };
 
 export const viewport: Viewport = {

@@ -98,7 +98,7 @@ describe("truthful update notices", () => {
       view({ recommendationUpdate: { mechanism: "LOCAL_RERANK", qlooRequested: false, internalCorrelationIds: [], previousTopIds: [], updatedTopIds: [], preferenceIds: [] } }),
       names,
     )!;
-    expect(local.title).toBe("Your shelf was reordered");
+    expect(local.title).toBe("Your picks were reordered");
     expect(local.detail).not.toMatch(/Qloo/);
     expect(local.detail).toContain("You said yes to Space Travel.");
   });
@@ -126,7 +126,7 @@ describe("counts, titles, notes and errors", () => {
     expect(answeredCount(view({ status: "finished", finishReason: "user_finished", questionCount: 2 }))).toBe(1);
     expect(answeredCount(view({ status: "finished", finishReason: "question_budget_exhausted", questionCount: 3 }))).toBe(3);
     expect(answeredCount(view({ status: "finished", finishReason: "user_finished", questionCount: 1, lastAnswer: null }))).toBe(0);
-    expect(finishLine(view({ status: "finished", finishReason: "user_finished", questionCount: 1 }))).toBe("You went straight to the books.");
+    expect(finishLine(view({ status: "finished", finishReason: "user_finished", questionCount: 1 }))).toBe("You went straight to your picks.");
   });
 
   it("splits series titles and humanizes unseen IDs", () => {

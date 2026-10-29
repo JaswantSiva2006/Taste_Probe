@@ -282,6 +282,36 @@ describe("POST /api/discovery/finish", () => {
   });
 });
 
+describe("S9.4 enabled journeys over HTTP (mock fixtures)", () => {
+  const begin = (body: Record<string, unknown>) => startRoute(post("/discovery/start", { maxQuestions: 3, ...body }));
+
+  it("music_artist -> book: typed search, explicit selection, question, finish with a path", async () => {
+    const search = await (await searchRoute(new Request(`${BASE}/entities/search?q=glass%20harbor&type=music_artist`))).json();
+    expect(search.data.results.map((r: { entityId: string }) => r.entityId)).toEqual(["mock:music_artist:glass-harbor", "mock:music_artist:glass-harbor-ensemble"]);
+    const v0 = await ok(await begin({ entityQuery: "Glass Harbor (synthetic)", sourceType: "music_artist", targetType: "book", selectedEntityId: "mock:music_artist:glass-harbor" }));
+    expect(v0.status).toBe("asking");
+    expect(v0.recommendations.every((r) => r.candidate.entityType === "book")).toBe(true);
+    const done = await ok(await finishRoute(post("/discovery/finish", { sessionToken: v0.sessionToken })));
+    expect(done.discoveryPath?.featured[0]?.recommendationEntityId).toBe(done.recommendations[0]!.candidate.entityId);
+  });
+
+  it("movie -> music_artist: artist candidates and artist wording", async () => {
+    const v0 = await ok(await begin({ entityQuery: "Interstellar", sourceType: "movie", targetType: "music_artist", selectedEntityId: "mock:movie:interstellar" }));
+    expect(v0.recommendations.every((r) => r.candidate.entityType === "music_artist")).toBe(true);
+    expect(v0.currentQuestion?.text).toMatch(/^Do you enjoy music artists associated with /);
+  });
+
+  it("a one-result anchor finishes truthfully instead of looping retrieval (S9.4 regression)", async () => {
+    const v = await ok(await begin({ entityQuery: "Lone Signal (synthetic)", sourceType: "music_artist", targetType: "book", selectedEntityId: "mock:music_artist:lone-signal" }));
+    expect(v.status).toBe("finished");
+    expect(v.finishReason).toBe("insufficient_question_evidence");
+    expect(v.questionCount).toBe(0);
+    expect(v.recommendations).toHaveLength(1);
+    expect(v.usage.agentToolCallCount).toBe(1);
+    expect(v.discoveryPath?.featured.map((f) => f.role)).toEqual(["START_HERE"]);
+  });
+});
+
 describe("S9.2 domain registry and Discovery Path over HTTP", () => {
   it("health exposes only enabled pairs", async () => {
     const json = await (await healthRoute()).json();

@@ -1,10 +1,12 @@
 "use client";
 
-import type { DiscoveryView, PreferenceResponse, ProviderMode } from "@/lib/contracts";
+import { domainLabel, type DiscoveryView, type PreferenceResponse, type ProviderMode } from "@/lib/contracts";
+import { lookOf } from "@/lib/ui/domains";
 import { questionCredit, tasteNotes, updateNotice, type NameBook } from "@/lib/ui/presentation";
-import { BookShelf } from "./BookShelf";
+import { DomainGlyph } from "./DomainGlyph";
 import { Check, Cross, Reel, Refresh } from "./Icons";
 import { Intertitle } from "./Intertitle";
+import { ResultShelf } from "./ResultShelf";
 
 export function Reels({ done, total, label }: { done: number; total: number; label: string }) {
   return (
@@ -18,7 +20,17 @@ export function Reels({ done, total, label }: { done: number; total: number; lab
   );
 }
 
-export function TasteNotes({ view, names, title = "Your taste notes" }: { view: DiscoveryView; names: NameBook; title?: string }) {
+export function TasteNotes({
+  view,
+  names,
+  title = "Your taste notes",
+  empty = "Nothing confirmed yet. Answers you give will appear here.",
+}: {
+  view: DiscoveryView;
+  names: NameBook;
+  title?: string;
+  empty?: string;
+}) {
   const notes = tasteNotes(view, names);
   return (
     <section className="tp-notes" aria-labelledby="tp-notes-title">
@@ -36,7 +48,7 @@ export function TasteNotes({ view, names, title = "Your taste notes" }: { view: 
           ))}
         </ul>
       ) : (
-        <p className="tp-notes__empty">Nothing confirmed yet. Answers you give will appear here.</p>
+        <p className="tp-notes__empty">{empty}</p>
       )}
     </section>
   );
@@ -63,13 +75,20 @@ export function Workspace({
   const notice = updateNotice(view, names);
   const remaining = view.maxQuestions - view.questionCount;
   const busy = pending !== null;
+  const plural = domainLabel(view.targetType, true);
+  const count = view.recommendations.length;
 
   return (
     <div className="tp-work">
       <header className="tp-strip">
         <div className="tp-strip__seed">
-          <span className="tp-strip__label">Now screening</span>
+          <span className="tp-strip__label">
+            From {domainLabel(view.seed.entityType)} to {plural}
+          </span>
           <span className="tp-strip__film">
+            <span className="tp-strip__glyph" aria-hidden="true">
+              <DomainGlyph glyph={lookOf(view.seed.entityType).glyph} size={20} />
+            </span>
             {view.seed.name}
             {view.seed.year ? <span className="tp-strip__year"> ({view.seed.year})</span> : null}
           </span>
@@ -81,7 +100,7 @@ export function Workspace({
           </span>
         </div>
         <button type="button" className="tp-btn tp-btn--ghost" onClick={onFinish} disabled={busy}>
-          {pending === "finish" ? "Printing your programme…" : "End screening, show my books"}
+          {pending === "finish" ? "Preparing your way in…" : "Show my way in"}
         </button>
       </header>
 
@@ -103,14 +122,14 @@ export function Workspace({
           <p className="tp-pending" role="status" aria-live="polite">
             {pending === "answer" ? (
               <>
-                <Refresh size={16} className="tp-spin" /> Recording your answer and updating the shelf…
+                <Refresh size={16} className="tp-spin" /> Recording your answer and updating your {plural}…
               </>
             ) : null}
           </p>
           {notice && !pending ? (
             // On narrow screens the shelf sits below the fold; surface the consequence here.
             <a className="tp-jump" href="#tp-shelf-title">
-              <span>{notice.mechanism === "UNCHANGED" ? "Your shelf held steady" : "See how your shelf changed"}</span>
+              <span>{notice.mechanism === "UNCHANGED" ? "Your picks held steady" : `See how your ${plural} changed`}</span>
               <span aria-hidden="true">↓</span>
             </a>
           ) : null}
@@ -120,13 +139,15 @@ export function Workspace({
         <section className="tp-work__shelf" aria-labelledby="tp-shelf-title">
           <div className="tp-shelf__head">
             <h2 className="tp-shelf__title" id="tp-shelf-title" tabIndex={-1}>
-              Your shelf
+              Your {plural}
             </h2>
-            <span className="tp-shelf__count">{view.recommendations.length} books</span>
+            <span className="tp-shelf__count">
+              {count} {domainLabel(view.targetType, count !== 1)}
+            </span>
           </div>
           {view.degraded ? (
             <p className="tp-notice tp-notice--warn" role="status">
-              Qloo didn’t respond to the refresh, so your current shelf was kept unchanged.
+              Qloo didn’t respond to the refresh, so your current {plural} were kept unchanged.
             </p>
           ) : null}
           {notice ? (
@@ -135,9 +156,12 @@ export function Workspace({
               <span>{notice.detail}</span>
             </div>
           ) : (
-            <p className="tp-shelf__intro">Qloo’s picks for fans of {view.seed.name}, best match first. Your answers reorder them.</p>
+            <p className="tp-shelf__intro">
+              {view.recommendations.some((r) => r.candidate.evidence.source === "mock") ? "Synthetic sample" : "Qloo’s"} {plural} for fans of{" "}
+              {view.seed.name}, best match first. Your answers reorder them.
+            </p>
           )}
-          <BookShelf items={view.recommendations} names={names} hasPrevious={Boolean(view.lastAnswer)} />
+          <ResultShelf items={view.recommendations} names={names} hasPrevious={Boolean(view.lastAnswer)} label={`Recommended ${plural}, best match first`} />
         </section>
       </div>
     </div>

@@ -1,20 +1,32 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiClientError } from "@/lib/api-client";
-import type { DiscoveryView, EntitySummary, PreferenceResponse, ProviderMode } from "@/lib/contracts";
+import type { DiscoveryView, EntitySummary, EntityType, PreferenceResponse, ProviderMode } from "@/lib/contracts";
+import { isOfferedPair, sourceChoices, targetChoices } from "@/lib/ui/domains";
 import { createNameBook, friendlyError, type FriendlyError } from "@/lib/ui/presentation";
 import { Refresh, Reel } from "./Icons";
-import { Landing } from "./Landing";
+import { Landing, type Capabilities } from "./Landing";
 import { Programme } from "./Programme";
 import { Workspace } from "./Workspace";
 
 type Pending = null | "search" | "start" | "answer" | "finish";
 type ShownError = FriendlyError & { code: string; requestId?: string; retry?: () => void };
 
+/**
+ * State machine (derived from the server contracts):
+ *   capabilities: loading → ready | error (retry)
+ *   onboarding:   target → source (filtered by target) → search → explicit selection → start
+ *   discovery:    view.status === "asking"  (answer → revision+1, or finish)
+ *   finale:       view.status === "finished" (Discovery Path), restart → onboarding
+ * Every transition is a real API response; the browser never decides availability.
+ */
 export function DiscoveryApp() {
   const [mode, setMode] = useState<ProviderMode | null>(null);
-  const [query, setQuery] = useState("Interstellar");
+  const [capabilities, setCapabilities] = useState<Capabilities>({ status: "loading" });
+  const [chosenTarget, setTarget] = useState<string | null>(null);
+  const [source, setSource] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [searchedFor, setSearchedFor] = useState<string | null>(null);
   const [results, setResults] = useState<EntitySummary[] | null>(null);
   const [selected, setSelected] = useState<EntitySummary | null>(null);
@@ -25,23 +37,48 @@ export function DiscoveryApp() {
   const names = useRef(createNameBook()).current;
   const errorRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  const pairs = useMemo(() => (capabilities.status === "ready" ? capabilities.pairs : []), [capabilities]);
+  // With a single destination there is nothing to choose; the anchor step opens directly.
+  const targets = targetChoices(pairs);
+  const target = chosenTarget ?? (targets.length === 1 ? targets[0]!.domain : null);
+
+  const fetchCapabilities = useCallback(() => {
     api.health().then(
-      (r) => setMode(r.mode),
-      () => setMode(null),
+      (r) => {
+        setMode(r.mode);
+        // An older server without the projection offers nothing rather than guessed pairs.
+        setCapabilities({ status: "ready", pairs: r.data.capabilities?.pairs ?? [] });
+      },
+      () => {
+        setMode(null);
+        setCapabilities({ status: "error" });
+      },
     );
   }, []);
 
-  // Move focus to the new primary heading whenever the screening advances.
+  useEffect(fetchCapabilities, [fetchCapabilities]);
+
+  function retryCapabilities() {
+    setCapabilities({ status: "loading" });
+    fetchCapabilities();
+  }
+
+  // Move focus to the new primary heading whenever the exploration advances.
   useEffect(() => {
     if (!view) return;
-    const target = document.getElementById(view.status === "finished" ? "tp-programme-title" : "tp-question");
-    target?.focus({ preventScroll: false });
+    const el = document.getElementById(view.status === "finished" ? "tp-programme-title" : "tp-question");
+    el?.focus({ preventScroll: false });
   }, [view?.sessionId, view?.revision, view?.status, view]);
 
   useEffect(() => {
     if (error) errorRef.current?.focus();
   }, [error]);
+
+  const labels = () => {
+    const t = targetChoices(pairs).find((c) => c.domain === (view?.targetType ?? target));
+    const s = sourceChoices(pairs, t?.domain ?? null).find((c) => c.domain === (view?.seed.entityType ?? source));
+    return { targetLabel: t?.pluralLabel, sourceLabel: s?.label };
+  };
 
   async function run<T>(kind: Pending, fn: () => Promise<{ data: T; mode: ProviderMode }>, onOk: (data: T) => void, retry: () => void) {
     setPending(kind);
@@ -52,7 +89,8 @@ export function DiscoveryApp() {
       onOk(r.data);
     } catch (e) {
       const code = e instanceof ApiClientError ? e.code : "UNKNOWN";
-      const friendly = friendlyError(code);
+      const friendly = friendlyError(code, labels());
+      // Retry is always a user click; nothing here re-sends automatically (429 included).
       setError({ ...friendly, code, requestId: e instanceof ApiClientError ? e.requestId : undefined, retry: friendly.recovery === "retry" ? retry : undefined });
     } finally {
       setPending(null);
@@ -65,13 +103,38 @@ export function DiscoveryApp() {
     setView(v);
   };
 
+  function chooseTarget(domain: string) {
+    setTarget(domain);
+    const allowed = sourceChoices(pairs, domain);
+    // Keep the anchor only if the new destination still allows it; a lone option is pre-chosen.
+    const keep = source && allowed.some((s) => s.domain === source) ? source : allowed.length === 1 ? allowed[0]!.domain : null;
+    if (keep !== source) {
+      setSource(keep);
+      setResults(null);
+      setSelected(null);
+      setSearchedFor(null);
+    }
+    setError(null);
+  }
+
+  function chooseSource(domain: string) {
+    if (domain === source) return;
+    setSource(domain);
+    setResults(null);
+    setSelected(null);
+    setSearchedFor(null);
+    setError(null);
+    requestAnimationFrame(() => document.getElementById("tp-anchor")?.focus());
+  }
+
   function search() {
     const q = query.trim();
-    if (!q) return;
+    if (!q || !source) return;
+    const type = source as EntityType;
     setSelected(null);
     void run(
       "search",
-      () => api.search(q, "movie"),
+      () => api.search(q, type),
       (d) => {
         setSearchedFor(q);
         setResults(d.results);
@@ -80,15 +143,19 @@ export function DiscoveryApp() {
     );
   }
 
+  const canStart = Boolean(selected && isOfferedPair(pairs, source, target) && selected.entityType === source);
+
   function start() {
-    if (!selected) return;
-    const film = selected;
-    void run(
-      "start",
-      () => api.start({ entityQuery: film.name, sourceType: "movie", targetType: "book", maxQuestions: 3, selectedEntityId: film.entityId }),
-      accept,
-      start,
-    );
+    if (!selected || !canStart) return;
+    const anchor = selected;
+    const input = {
+      entityQuery: anchor.name,
+      sourceType: source as EntityType,
+      targetType: target as EntityType,
+      maxQuestions: 3 as const,
+      selectedEntityId: anchor.entityId,
+    };
+    void run("start", () => api.start(input), accept, start);
   }
 
   function answer(response: PreferenceResponse) {
@@ -110,13 +177,22 @@ export function DiscoveryApp() {
     attempt();
   }
 
-  function restart() {
+  /** Back to the start: a new world (default) or the same world with a new anchor. */
+  function restart(keepWorld = false) {
     setView(null);
     setError(null);
     setSelected(null);
     setResults(null);
     setSearchedFor(null);
-    requestAnimationFrame(() => document.getElementById("tp-film")?.focus());
+    setQuery("");
+    if (!keepWorld) {
+      setTarget(null);
+      setSource(null);
+    }
+    requestAnimationFrame(() => {
+      const focus = keepWorld ? document.getElementById("tp-anchor") : document.querySelector<HTMLInputElement>('input[name="tp-target"]');
+      (focus ?? document.getElementById("tp-hero-title"))?.focus();
+    });
   }
 
   const busy = pending !== null;
@@ -129,17 +205,17 @@ export function DiscoveryApp() {
       </a>
       {mode === "mock" ? (
         <div className="tp-mockbar" role="note">
-          <strong>Demo data.</strong> Mock mode: every film, book, tag and score is a synthetic fixture. No Qloo or Gemini calls are made.
+          <strong>Demo data.</strong> Mock mode: every title, tag and score is a synthetic fixture. No Qloo or Gemini calls are made.
         </div>
       ) : null}
 
       <header className="tp-top">
-        <button type="button" className="tp-brand" onClick={restart} disabled={busy} aria-label="TasteProbe, start a new screening">
+        <button type="button" className="tp-brand" onClick={() => restart()} disabled={busy} aria-label="TasteProbe, start a new exploration">
           <Reel size={22} />
           <span>TasteProbe</span>
         </button>
         <span className="tp-top__mode">
-          {mode === "live" ? "Live · Qloo + Gemini" : mode === "mock" ? "Mock mode" : "Connecting…"}
+          {mode === "live" ? "Live · Qloo + Gemini" : mode === "mock" ? "Mock mode" : capabilities.status === "error" ? "Offline" : "Connecting…"}
         </span>
       </header>
 
@@ -157,8 +233,8 @@ export function DiscoveryApp() {
                 </button>
               ) : null}
               {error.recovery === "restart" ? (
-                <button type="button" className="tp-btn tp-btn--amber tp-btn--sm" onClick={restart}>
-                  Start a new screening
+                <button type="button" className="tp-btn tp-btn--amber tp-btn--sm" onClick={() => restart(true)}>
+                  Start again
                 </button>
               ) : null}
               <button type="button" className="tp-btn tp-btn--ghost tp-btn--sm" onClick={() => setError(null)}>
@@ -171,6 +247,12 @@ export function DiscoveryApp() {
         {phase === "landing" ? (
           <Landing
             mode={mode}
+            capabilities={capabilities}
+            onRetryCapabilities={retryCapabilities}
+            target={target}
+            onTarget={chooseTarget}
+            source={source}
+            onSource={chooseSource}
             query={query}
             onQuery={setQuery}
             onSearch={search}
@@ -181,6 +263,7 @@ export function DiscoveryApp() {
             onSelect={setSelected}
             onStart={start}
             starting={pending === "start"}
+            canStart={canStart}
             busy={busy}
           />
         ) : null}
@@ -195,7 +278,7 @@ export function DiscoveryApp() {
             onFinish={finish}
           />
         ) : null}
-        {phase === "finale" && view ? <Programme view={view} names={names} onRestart={restart} /> : null}
+        {phase === "finale" && view ? <Programme view={view} names={names} onRestart={() => restart()} onNewAnchor={() => restart(true)} /> : null}
       </main>
 
       <footer className="tp-foot">
