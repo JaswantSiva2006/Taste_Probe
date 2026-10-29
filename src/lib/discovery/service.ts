@@ -10,6 +10,7 @@ import type {
   StartRequest,
   TurnTrace,
 } from "@/lib/contracts";
+import { enabledSourceDomains, pairStatus } from "@/lib/contracts";
 import type { AgentMode, BoundedAgent } from "@/lib/agent/bounded";
 import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import { MAX_REQUESTS_PER_DECISION } from "@/lib/agent/gemini-agent";
@@ -34,6 +35,7 @@ import {
   type LiveOutcome,
 } from "./live-turn";
 import { normalizeEntity, normalizeRecommendations, normalizeSearchResults } from "./normalize";
+import { buildDiscoveryPath } from "./path";
 import { applyAnswer, buildAnswer } from "./preferences";
 import {
   availableQuestions,
@@ -99,6 +101,26 @@ function withUsage(state: SessionState, ledger: UsageLedger): SessionState {
 
 export async function searchEntities(deps: DiscoveryDeps, q: string, type?: EntitySummary["entityType"]) {
   return { results: normalizeSearchResults(await deps.provider.searchEntities(q, type)) };
+}
+
+/** Public anchor search: a typed search must name a source of an enabled pair (checked before Qloo). */
+export async function searchAnchors(deps: DiscoveryDeps, q: string, type?: EntitySummary["entityType"]) {
+  if (type && !enabledSourceDomains().includes(type)) {
+    throw new AppError("UNSUPPORTED_DOMAIN", 400, `Searching for a ${type} anchor is not supported`);
+  }
+  return searchEntities(deps, q, type);
+}
+
+/** Registry gate for Start. Runs before seed resolution, so a rejected pair costs no provider call. */
+export function assertEnabledPair(input: Pick<StartRequest, "sourceType" | "targetType">): void {
+  const status = pairStatus(input.sourceType, input.targetType);
+  if (status !== "enabled") {
+    throw new AppError(
+      "UNSUPPORTED_DOMAIN",
+      400,
+      `${input.sourceType} -> ${input.targetType} discovery is ${status === "disabled" ? "not available yet" : "not supported"}`,
+    );
+  }
 }
 
 async function resolveSeed(deps: DiscoveryDeps, input: StartRequest): Promise<EntitySummary> {
@@ -283,6 +305,13 @@ function toView(
   const { session } = state;
   const ranked = rankCandidates(state.candidates, session, previousOrder);
   const finished = session.status === "finished";
+  const recommendations = finished ? ranked.slice(0, deps.config.limits.finalRecommendationCount) : ranked;
+  const preferences = {
+    positiveTagIds: session.positiveTagIds,
+    rejectedTagIds: session.rejectedTagIds,
+    positiveEntityIds: session.positiveEntityIds,
+    rejectedEntityIds: session.rejectedEntityIds,
+  };
   const currentQuestion = session.currentQuestionId
     ? (buildQuestionCandidates(state.candidates, session.targetType).find(
         (q) => q.questionId === session.currentQuestionId,
@@ -300,13 +329,8 @@ function toView(
     maxQuestions: session.maxQuestions,
     currentQuestion,
     lastAnswer: session.answers.at(-1) ?? null,
-    preferences: {
-      positiveTagIds: session.positiveTagIds,
-      rejectedTagIds: session.rejectedTagIds,
-      positiveEntityIds: session.positiveEntityIds,
-      rejectedEntityIds: session.rejectedEntityIds,
-    },
-    recommendations: finished ? ranked.slice(0, deps.config.limits.finalRecommendationCount) : ranked,
+    preferences,
+    recommendations,
     rankingChanged: previousOrder !== null && !sameOrder(previousOrder, orderOf(ranked)),
     agent: live
       ? { name: deps.boundedAgent?.name ?? deps.agent.name, decision, mode: live.mode, fallbackReason: live.fallbackReason }
@@ -318,6 +342,8 @@ function toView(
       ...(session.geminiRequestCount !== undefined ? { geminiRequestCount: session.geminiRequestCount } : {}),
     },
     ...(live ? { recommendationUpdate: live.update, degraded: live.degraded ? { reason: live.degraded } : null, trace: live.trace } : {}),
+    // Pure presentation of the final list: no provider call, no ranking change, not stored in the session.
+    ...(finished ? { discoveryPath: buildDiscoveryPath({ recommendations, preferences, seed: state.seed, targetType: session.targetType }) } : {}),
   };
 }
 
@@ -410,6 +436,7 @@ function preferenceDelta(before: SessionState["session"], after: SessionState["s
 const nowOf = (deps: DiscoveryDeps) => (deps.now ?? Date.now)();
 
 export async function startDiscovery(deps: DiscoveryDeps, input: StartRequest): Promise<DiscoveryView> {
+  assertEnabledPair(input);
   if (deps.boundedAgent) return startLive(deps, input);
   const seed = await resolveSeed(deps, input);
   const session = createSession({

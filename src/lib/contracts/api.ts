@@ -7,9 +7,11 @@ import {
   PreferenceAnswerSchema,
   PreferenceResponseSchema,
   ProviderModeSchema,
+  ProvenanceSchema,
   QuestionSchema,
   RankedRecommendationSchema,
 } from "./domain";
+import { PublicCapabilitiesSchema } from "./capabilities";
 
 /**
  * HTTP wire contracts. The session token travels in the JSON body:
@@ -31,6 +33,7 @@ export const ApiErrorCodeSchema = z.enum([
   "ENTITY_NOT_FOUND",
   "ENTITY_TYPE_MISMATCH",
   "ENTITY_NOT_RESOLVED",
+  "UNSUPPORTED_DOMAIN",
   "NO_RECOMMENDATIONS",
   "INVALID_SESSION_TOKEN",
   "SESSION_EXPIRED",
@@ -85,6 +88,8 @@ export const HealthDataSchema = z.object({
   qloo: z.object({ mode: ProviderModeSchema, implemented: z.boolean() }),
   agent: z.string(),
   readiness: z.object({ configuration: z.literal("ready"), sessionStore: z.enum(["memory", "redis"]), dependencies: z.literal("configured") }).optional(),
+  /** S9.2: enabled domain pairs only (read-only projection of the server registry). */
+  capabilities: PublicCapabilitiesSchema.optional(),
 });
 export type HealthData = z.infer<typeof HealthDataSchema>;
 
@@ -188,6 +193,49 @@ export const TurnTraceSchema = z.object({
 });
 export type TurnTrace = z.infer<typeof TurnTraceSchema>;
 
+// ---- S9.2 Discovery Path (presentation of the final shortlist) ------------
+
+/** GO_FURTHER is reserved: no current metadata can justify it, so the presenter never emits it. */
+export const DiscoveryPathRoleSchema = z.enum(["START_HERE", "EXPLORE_NEXT", "ANOTHER_DIRECTION", "GO_FURTHER"]);
+export type DiscoveryPathRole = z.infer<typeof DiscoveryPathRoleSchema>;
+
+export const PathExplanationKindSchema = z.enum(["preference_match", "metadata_contrast", "source_grounded"]);
+export type PathExplanationKind = z.infer<typeof PathExplanationKindSchema>;
+
+/** Every ID resolves inside the same response: seed, preferences, or the candidate's own tags. */
+export const PathEvidenceSchema = z.object({
+  provenance: ProvenanceSchema,
+  seedEntityIds: z.array(z.string()),
+  /** Confirmed positive preference IDs (tag or entity) found in `preferences`. */
+  preferenceIds: z.array(z.string()),
+  /** Candidate tag IDs cited as metadata (e.g. a contrast). */
+  tagIds: z.array(z.string()),
+});
+export type PathEvidence = z.infer<typeof PathEvidenceSchema>;
+
+export const DiscoveryPathItemSchema = z.object({
+  role: DiscoveryPathRoleSchema,
+  recommendationEntityId: z.string().min(1),
+  /** 1-based position in `recommendations` (unchanged ranking). */
+  position: z.number().int().positive(),
+  explanation: z.object({
+    kind: PathExplanationKindSchema,
+    text: z.string().min(1),
+    evidence: PathEvidenceSchema,
+  }),
+});
+export type DiscoveryPathItem = z.infer<typeof DiscoveryPathItemSchema>;
+
+export const DiscoveryPathSchema = z.object({
+  version: z.literal(1),
+  sourceType: EntityTypeSchema,
+  targetType: EntityTypeSchema,
+  featured: z.array(DiscoveryPathItemSchema).max(3),
+  /** Remaining final recommendations in ranked order, never repeating a featured ID. */
+  remainingEntityIds: z.array(z.string()),
+});
+export type DiscoveryPath = z.infer<typeof DiscoveryPathSchema>;
+
 export const DiscoveryViewSchema = z.object({
   sessionToken: z.string().min(1),
   sessionId: z.string().min(1),
@@ -228,5 +276,7 @@ export const DiscoveryViewSchema = z.object({
   degraded: z.object({ reason: z.string() }).nullable().optional(),
   /** S7 (live): sanitized per-request accounting. */
   trace: TurnTraceSchema.optional(),
+  /** S9.2: present only on finished views; derived from `recommendations`, never stored. */
+  discoveryPath: DiscoveryPathSchema.optional(),
 });
 export type DiscoveryView = z.infer<typeof DiscoveryViewSchema>;

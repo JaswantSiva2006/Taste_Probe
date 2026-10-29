@@ -8,6 +8,7 @@ import { createDeterministicMockAgent } from "@/lib/agent/mock-agent";
 import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import { createDiscoveryDeps } from "@/lib/discovery/deps";
 import { answerDiscovery, finishDiscovery, startDiscovery, type DiscoveryDeps } from "@/lib/discovery/service";
+import { discoveryPathProblems } from "@/lib/discovery/path";
 import { isUsefulTag } from "@/lib/discovery/tag-quality";
 import { buildQuestionCandidates } from "@/lib/discovery/questions";
 import type { QlooProvider, RecommendationRequest } from "@/lib/qloo/provider";
@@ -571,5 +572,29 @@ describe("S4 security with live work", () => {
     expect(done.preferences.positiveTagIds).toEqual([SF.id]);
     expect(done.usage).toMatchObject({ qlooCallCount: 2, geminiRequestCount: 3 });
     expectGrounded(done);
+  });
+
+  it("S9.2 Discovery Path is built from the final Qloo books with no extra Qloo or Gemini call", async () => {
+    const pick: Responder = () => fc("ask_question", { questionId: `tag:${SF.id}`, reasonCode: "informative_question" });
+    const env = liveEnv({ gemini: [pick, retrieveTags([SF.id]), askTop] });
+    const v1 = await answer(env.deps, await startDiscovery(env.deps, START), "like");
+    const before = { insights: env.qloo.insights.length, searches: env.qloo.searches(), gemini: env.gemini.bodies.length };
+    const done = await finishDiscovery(env.deps, v1.sessionToken);
+    const again = await finishDiscovery(env.deps, done.sessionToken);
+    expect({ insights: env.qloo.insights.length, searches: env.qloo.searches(), gemini: env.gemini.bodies.length }).toEqual(before);
+    expect(done.usage).toMatchObject({ qlooCallCount: v1.usage.qlooCallCount, geminiRequestCount: v1.usage.geminiRequestCount });
+
+    const path = done.discoveryPath!;
+    expect(again.discoveryPath).toEqual(path);
+    expect(path.featured[0]).toMatchObject({ role: "START_HERE", recommendationEntityId: done.recommendations[0]!.candidate.entityId });
+    expect(discoveryPathProblems(path, done)).toEqual([]);
+    for (const f of path.featured) {
+      expect(f.explanation.evidence).toMatchObject({ provenance: "qloo", seedEntityIds: [MOVIE_ID] });
+      expect(f.explanation.text).toMatch(/Qloo (also )?returned this/);
+    }
+    const top = done.recommendations[0]!;
+    if (top.matchedPositiveTagIds.includes(SF.id)) {
+      expect(path.featured[0]!.explanation).toMatchObject({ kind: "preference_match", evidence: { preferenceIds: [SF.id] } });
+    }
   });
 });

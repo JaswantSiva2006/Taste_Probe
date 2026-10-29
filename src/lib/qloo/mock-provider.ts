@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { EntityType } from "@/lib/contracts";
+import { qlooTypeOf as typeUrn } from "@/lib/contracts";
 import { MOCK_RECOMMENDATIONS, MOCK_SEARCH_ENTITIES } from "./fixtures";
 import type { QlooProvider, RecommendationRequest } from "./provider";
 import type { ProviderResult, RawInsightsResponse, RawSearchEntity, RawSearchResponse } from "./raw-types";
-
-const typeUrn = (type: EntityType) => `urn:entity:${type}`;
 
 const mockResult = <T>(payload: T): ProviderResult<T> => ({
   provenance: "mock",

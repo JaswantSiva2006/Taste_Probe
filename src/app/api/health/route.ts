@@ -1,4 +1,4 @@
-import type { HealthData } from "@/lib/contracts";
+import { publicCapabilities, type HealthData } from "@/lib/contracts";
 import { agentLabel } from "@/lib/agent/factory";
 import { LIVE_QLOO_IMPLEMENTED } from "@/lib/qloo";
 import { handleApi } from "@/lib/validation/http";
@@ -13,5 +13,6 @@ export async function GET(): Promise<Response> {
     qloo: { mode: config.mode, implemented: config.mode === "mock" || LIVE_QLOO_IMPLEMENTED },
     agent: agentLabel(config),
     readiness: { configuration: "ready", sessionStore: config.sessionStore.kind, dependencies: "configured" },
+    capabilities: publicCapabilities(),
   }));
 }

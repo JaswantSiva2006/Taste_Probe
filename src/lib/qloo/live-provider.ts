@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AppConfig } from "@/lib/config/env";
-import type { EntityType } from "@/lib/contracts";
+import { qlooTypeOf, type EntityType } from "@/lib/contracts";
 import { logEvent } from "@/lib/telemetry/logger";
 import { AppError } from "@/lib/validation/errors";
 import type { QlooProvider, RecommendationRequest } from "./provider";
@@ -103,7 +103,8 @@ export function parseInsightsResponse(value: unknown): RawInsightsResponse {
   return { success: parsed.data.success, results: { entities } };
 }
 
-const typeUrn = (type: EntityType) => `urn:entity:${type}`;
+/** Wire types come from the S9.2 domain registry, never from the client. */
+const typeUrn = (type: EntityType) => qlooTypeOf(type);
 
 function appendIds(params: URLSearchParams, key: string, ids: string[] | undefined): void {
   const clean = [...new Set((ids ?? []).filter((id) => id.trim().length > 0))];

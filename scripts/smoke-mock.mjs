@@ -165,6 +165,17 @@ async function run(base) {
   assert.ok(done.questionCount <= 3);
   step(`finish: ${done.recommendations.length} final mock recommendations, top = ${done.recommendations[0].candidate.name}`);
 
+  // S9.2: additive Discovery Path over the same final list.
+  const path = done.discoveryPath;
+  const ids = done.recommendations.map((r) => r.candidate.entityId);
+  const pathIds = [...path.featured.map((f) => f.recommendationEntityId), ...path.remainingEntityIds];
+  assert.equal(path.featured[0].role, "START_HERE");
+  assert.equal(path.featured[0].recommendationEntityId, ids[0]);
+  assert.equal(new Set(pathIds).size, pathIds.length, "discovery path must not repeat an entity");
+  assert.deepEqual([...pathIds].sort(), [...ids].sort(), "discovery path must cover exactly the final recommendations");
+  assert.ok(path.featured.every((f) => f.explanation.evidence.provenance === "mock" && !/Qloo returned/.test(f.explanation.text)));
+  step(`discovery path: ${path.featured.map((f) => f.role).join(" > ")} + ${path.remainingEntityIds.length} more`);
+
   const after = await call(base, "POST", "/api/discovery/answer", {
     sessionToken: done.sessionToken,
     questionId: v1.currentQuestion?.questionId ?? v0.currentQuestion.questionId,

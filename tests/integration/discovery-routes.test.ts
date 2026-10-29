@@ -279,3 +279,66 @@ describe("POST /api/discovery/finish", () => {
     await fail(await finishRoute(post("/discovery/finish", { sessionToken: "x.y.z" })), 401, "INVALID_SESSION_TOKEN");
   });
 });
+
+describe("S9.2 domain registry and Discovery Path over HTTP", () => {
+  it("health exposes only enabled pairs", async () => {
+    const json = await (await healthRoute()).json();
+    expect(json.data.capabilities).toEqual({ pairs: [{ source: "movie", target: "book", sourceLabel: "film", targetLabel: "books" }] });
+  });
+
+  it("rejects unsupported pairs and domain values with clear errors", async () => {
+    await fail(await startRoute(post("/discovery/start", { ...START_BODY, sourceType: "book", targetType: "movie" })), 400, "UNSUPPORTED_DOMAIN");
+    await fail(await startRoute(post("/discovery/start", { ...START_BODY, targetType: "movie" })), 400, "UNSUPPORTED_DOMAIN");
+    await fail(await startRoute(post("/discovery/start", { ...START_BODY, sourceType: "music_artist" })), 400, "VALIDATION_ERROR");
+    await fail(await startRoute(post("/discovery/start", { ...START_BODY, pairEnabled: true })), 400, "VALIDATION_ERROR");
+    await fail(await searchRoute(new Request(`${BASE}/entities/search?q=alpha&type=book`)), 400, "UNSUPPORTED_DOMAIN");
+  });
+
+  it("Movie → Books: start → answer → finish returns a grounded Discovery Path", async () => {
+    const v0 = await start();
+    expect(v0.discoveryPath).toBeUndefined();
+    const v1 = await ok(await answer(v0, "like"));
+    expect(v1.revision).toBe(1);
+    expect(v1.discoveryPath).toBeUndefined();
+    const done = await ok(await finishRoute(post("/discovery/finish", { sessionToken: v1.sessionToken })));
+    expect(done.revision).toBe(2);
+    expect(done.status).toBe("finished");
+    expect(done.usage.qlooCallCount).toBe(v1.usage.qlooCallCount);
+
+    const path = done.discoveryPath!;
+    const ids = done.recommendations.map((r) => r.candidate.entityId);
+    expect(path).toMatchObject({ version: 1, sourceType: "movie", targetType: "book" });
+    expect(path.featured[0]).toMatchObject({ role: "START_HERE", recommendationEntityId: ids[0], position: 1 });
+    const all = [...path.featured.map((f) => f.recommendationEntityId), ...path.remainingEntityIds];
+    expect(new Set(all).size).toBe(all.length);
+    expect([...all].sort()).toEqual([...ids].sort());
+    for (const f of path.featured) {
+      expect(ids).toContain(f.recommendationEntityId);
+      expect(f.explanation.evidence.provenance).toBe("mock");
+      expect(f.explanation.text).toContain("synthetic sample");
+      expect(f.explanation.text).not.toMatch(/Qloo returned/);
+      for (const id of f.explanation.evidence.preferenceIds) expect(done.preferences.positiveTagIds).toContain(id);
+    }
+    // The liked tag reached the top pick, so its explanation cites that confirmed answer.
+    const liked = v1.preferences.positiveTagIds;
+    if (done.recommendations[0]!.matchedPositiveTagIds.some((id) => liked.includes(id))) {
+      expect(path.featured[0]!.explanation.kind).toBe("preference_match");
+    }
+
+    // Idempotent re-finish returns the same path; replay protection is unchanged.
+    const again = await ok(await finishRoute(post("/discovery/finish", { sessionToken: done.sessionToken })));
+    expect(again.discoveryPath).toEqual(path);
+    expect(again.revision).toBe(2);
+    await fail(await answer(v1, "like"), 409, "SESSION_REVISION_CONFLICT");
+  });
+
+  it("the legacy recommendations array is untouched by the path", async () => {
+    const v1 = await ok(await answer(await start(), "dislike"));
+    const done = await ok(await finishRoute(post("/discovery/finish", { sessionToken: v1.sessionToken })));
+    expect(done.recommendations.map((r) => r.position)).toEqual(done.recommendations.map((_, i) => i + 1));
+    for (const f of done.discoveryPath!.featured) {
+      expect(f.explanation.evidence.preferenceIds).toEqual([]);
+      for (const id of f.explanation.evidence.tagIds) expect(done.preferences.rejectedTagIds).not.toContain(id);
+    }
+  });
+});
