@@ -30,7 +30,8 @@ describe("contracts", () => {
     const input = { entityQuery: "Interstellar", sourceType: "movie", targetType: "book", maxQuestions: 3 };
     expect(DiscoveryInputSchema.parse(input)).toEqual(input);
     expect(DiscoveryInputSchema.safeParse({ ...input, maxQuestions: 4 }).success).toBe(false);
-    expect(DiscoveryInputSchema.safeParse({ ...input, sourceType: "podcast" }).success).toBe(false);
+    // S9.3: podcast is a registered domain (pair access is checked by the registry gate); unknown values still fail.
+    expect(DiscoveryInputSchema.safeParse({ ...input, sourceType: "magazine" }).success).toBe(false);
     expect(DiscoveryInputSchema.safeParse({ ...input, entityQuery: "  " }).success).toBe(false);
   });
 

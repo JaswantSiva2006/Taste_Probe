@@ -8,7 +8,7 @@ import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer
 import type { QlooProvider } from "@/lib/qloo/provider";
 import type { SessionState } from "@/lib/session/state";
 import { AppError } from "@/lib/validation/errors";
-import { normalizeRecommendations } from "./normalize";
+import { normalizeTargetCandidates } from "./normalize";
 import { optimizeQuestions } from "./question-optimizer";
 import { availableQuestions, buildQuestionCandidates } from "./questions";
 import { rankCandidates } from "./ranking";
@@ -46,6 +46,8 @@ export type LiveLedger = {
   correlationIds: string[];
   retrieved: boolean;
   degraded: string | null;
+  /** Insights entities dropped because they were not the target domain (S9.3 telemetry). */
+  normalizationRejected: number;
   questionPool?: Question[];
   questionGeneration?: {
     generated: number;
@@ -73,6 +75,7 @@ export function newLedger(): LiveLedger {
     correlationIds: [],
     retrieved: false,
     degraded: null,
+    normalizationRejected: 0,
   };
 }
 
@@ -154,10 +157,11 @@ export async function retrieve(
   ledger.qlooBudgetCalls += Math.max(1, result.requestCount);
   ledger.correlationIds.push(result.requestId);
   ledger.retrieved = true;
-  const expectedSource = deps.config.mode === "live" ? "qloo" : "mock";
-  const candidates = normalizeRecommendations(result, session.anchorIds, deps.config.limits.maxRecommendationCandidates).filter(
-    (c) => c.entityType === session.targetType && c.evidence.source === expectedSource,
-  );
+  const { candidates, rejected } = normalizeTargetCandidates(result, session.anchorIds, deps.config.limits.maxRecommendationCandidates, {
+    targetType: session.targetType,
+    provenance: deps.config.mode === "live" ? "qloo" : "mock",
+  });
+  ledger.normalizationRejected += rejected;
   if (!candidates.length) return null;
   return { ...state, candidates };
 }

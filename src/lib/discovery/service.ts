@@ -10,7 +10,7 @@ import type {
   StartRequest,
   TurnTrace,
 } from "@/lib/contracts";
-import { enabledSourceDomains, pairStatus } from "@/lib/contracts";
+import { domainLabel, enabledSourceDomains, pairAccess, type PairAccess } from "@/lib/contracts";
 import type { AgentMode, BoundedAgent } from "@/lib/agent/bounded";
 import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import { MAX_REQUESTS_PER_DECISION } from "@/lib/agent/gemini-agent";
@@ -34,7 +34,7 @@ import {
   type LiveLedger,
   type LiveOutcome,
 } from "./live-turn";
-import { normalizeEntity, normalizeRecommendations, normalizeSearchResults } from "./normalize";
+import { normalizeEntity, normalizeSearchResults, normalizeTargetCandidates } from "./normalize";
 import { buildDiscoveryPath } from "./path";
 import { applyAnswer, buildAnswer } from "./preferences";
 import {
@@ -105,30 +105,39 @@ export async function searchEntities(deps: DiscoveryDeps, q: string, type?: Enti
 
 /** Public anchor search: a typed search must name a source of an enabled pair (checked before Qloo). */
 export async function searchAnchors(deps: DiscoveryDeps, q: string, type?: EntitySummary["entityType"]) {
-  if (type && !enabledSourceDomains().includes(type)) {
+  if (type && !enabledSourceDomains(deps.config.verification.pairs).includes(type)) {
     throw new AppError("UNSUPPORTED_DOMAIN", 400, `Searching for a ${type} anchor is not supported`);
   }
   return searchEntities(deps, q, type);
 }
 
-/** Registry gate for Start. Runs before seed resolution, so a rejected pair costs no provider call. */
-export function assertEnabledPair(input: Pick<StartRequest, "sourceType" | "targetType">): void {
-  const status = pairStatus(input.sourceType, input.targetType);
-  if (status !== "enabled") {
+/**
+ * Registry gate for Start. Runs before seed resolution, so a rejected pair costs
+ * no provider call. Only server configuration (never the request) can admit a
+ * disabled pair, and only outside production.
+ */
+export function assertEnabledPair(
+  input: Pick<StartRequest, "sourceType" | "targetType">,
+  verificationPairs: readonly string[] = [],
+): PairAccess {
+  const access = pairAccess(input.sourceType, input.targetType, verificationPairs);
+  if (access === "disabled" || access === "unregistered") {
     throw new AppError(
       "UNSUPPORTED_DOMAIN",
       400,
-      `${input.sourceType} -> ${input.targetType} discovery is ${status === "disabled" ? "not available yet" : "not supported"}`,
+      `${input.sourceType} -> ${input.targetType} discovery is ${access === "disabled" ? "not available yet" : "not supported"}`,
     );
   }
+  return access;
 }
 
 async function resolveSeed(deps: DiscoveryDeps, input: StartRequest): Promise<EntitySummary> {
   let seed: EntitySummary | null = null;
   if (input.selectedEntityId) {
-    // Re-resolve the client-selected ID against provider results for the submitted query.
-    // This keeps untrusted client IDs behind the server-side provider boundary.
-    const result = await deps.provider.searchEntities(input.entityQuery);
+    // Re-resolve the client-selected ID against provider results for the submitted query,
+    // filtered to the registry's source type. This keeps untrusted client IDs behind the
+    // server-side provider boundary; the ID is never derived from a name.
+    const result = await deps.provider.searchEntities(input.entityQuery, input.sourceType);
     const raw = result.payload.results.find((entity) => entity.entity_id === input.selectedEntityId);
     if (raw) {
       seed = normalizeEntity(raw, result.provenance);
@@ -223,7 +232,10 @@ async function runAgent(
     }
     const used = Math.max(1, result.requestCount);
     ledger.qlooCalls += used;
-    const candidates = normalizeRecommendations(result, current.session.anchorIds, limits.maxRecommendationCandidates);
+    const { candidates } = normalizeTargetCandidates(result, current.session.anchorIds, limits.maxRecommendationCandidates, {
+      targetType: current.session.targetType,
+      provenance: result.provenance,
+    });
     current = {
       ...current,
       candidates,
@@ -234,7 +246,7 @@ async function runAgent(
       },
     };
     if (candidates.length === 0) {
-      throw new AppError("NO_RECOMMENDATIONS", 422, `No ${current.session.targetType} recommendations for this entity`);
+      throw new AppError("NO_RECOMMENDATIONS", 422, `No ${domainLabel(current.session.targetType, true)} recommendations for this entity`);
     }
   }
 }
@@ -257,8 +269,23 @@ function applyOutcome(
     };
   }
   const reason: FinishReason =
-    decision.reasonCode === "question_budget_exhausted" ? "question_budget_exhausted" : "stable_recommendations";
+    decision.reasonCode === "question_budget_exhausted"
+      ? "question_budget_exhausted"
+      : noQuestionEvidence(state)
+        ? "insufficient_question_evidence"
+        : "stable_recommendations";
   return finishState(state, reason);
+}
+
+/**
+ * True when the verified candidates support no grounded question at all, so the
+ * session finished before asking anything. Never padded with filler questions.
+ */
+function noQuestionEvidence(state: SessionState): boolean {
+  return (
+    state.session.questionCount === 0 &&
+    availableQuestions(buildQuestionCandidates(state.candidates, state.session.targetType), state.session).length === 0
+  );
 }
 
 function finishState(state: SessionState, reason: FinishReason): SessionState {
@@ -361,12 +388,32 @@ function liveDepsOf(deps: DiscoveryDeps, ledger: LiveLedger): LiveDeps {
   };
 }
 
+/**
+ * S9.3 pair-aware fields for every turn log: which directed pair, how it was
+ * admitted, and what the user got. Counts and identifiers only.
+ */
+function pairFields(deps: DiscoveryDeps, state: SessionState): Record<string, unknown> {
+  const { session } = state;
+  const finished = session.status === "finished";
+  const finalCount = Math.min(state.candidates.length, deps.config.limits.finalRecommendationCount);
+  return {
+    sourceType: session.sourceType,
+    targetType: session.targetType,
+    capability: pairAccess(session.sourceType, session.targetType, deps.config.verification.pairs),
+    candidateCount: state.candidates.length,
+    questionCount: session.questionCount,
+    finishReason: state.finishReason,
+    ...(finished ? { recommendationCount: finalCount, discoveryPathCount: Math.min(3, finalCount) } : {}),
+  };
+}
+
 /** Structured per-request trace: counts, decisions, cost. Never tokens, prompts or secrets. */
 function logTurn(deps: DiscoveryDeps, kind: string, ledger: LiveLedger, fields: Record<string, unknown>): void {
   const t = traceOf(ledger, deps.store.kind);
   logEvent("info", "discovery.turn", {
     requestId: deps.requestId,
     kind,
+    normalizationRejected: ledger.normalizationRejected,
     sessionStore: t.sessionStore,
     turnId: t.turnId,
     qlooRequests: t.qlooRequests,
@@ -382,7 +429,7 @@ function logTurn(deps: DiscoveryDeps, kind: string, ledger: LiveLedger, fields: 
 }
 
 /** S7 live start: verified seed -> initial Qloo retrieval -> S5 -> S6 decision -> atomic create. */
-async function startLive(deps: DiscoveryDeps, input: StartRequest): Promise<DiscoveryView> {
+async function startLive(deps: DiscoveryDeps, input: StartRequest, access: PairAccess): Promise<DiscoveryView> {
   const ledger = newLedger();
   const live = liveDepsOf(deps, ledger);
   const seed = await resolveSeed({ ...deps, provider: live.provider }, input);
@@ -398,7 +445,10 @@ async function startLive(deps: DiscoveryDeps, input: StartRequest): Promise<Disc
   const initial: SessionState = { session, seed, candidates: [], order: [], finishReason: null };
   // Initial retrieval is application-driven (not an agent tool call); no session exists yet to lock.
   const retrieved = await retrieve(live, initial, ledger, { positiveTagIds: [], positiveEntityIds: [] });
-  if (!retrieved) throw new AppError("NO_RECOMMENDATIONS", 422, `No ${input.targetType} recommendations for this entity`);
+  if (!retrieved) {
+    logEvent("info", "discovery.no_candidates", { requestId: deps.requestId, sourceType: input.sourceType, targetType: input.targetType, capability: access, qlooRequests: ledger.qlooNetwork, normalizationRejected: ledger.normalizationRejected });
+    throw new AppError("NO_RECOMMENDATIONS", 422, `No ${domainLabel(input.targetType, true)} recommendations for this entity`);
+  }
 
   const outcome = await decideAndExecute(live, retrieved, ledger, { allowRetrieval: false });
   const final = applyLedger(withOrder(applyOutcome(outcome.state, outcome.question, outcome.decision), null), ledger);
@@ -411,7 +461,7 @@ async function startLive(deps: DiscoveryDeps, input: StartRequest): Promise<Disc
     updatedTopIds: topIds(final, null),
     preferenceIds: [],
   };
-  logTurn(deps, "start", ledger, { revision: 0, action: outcome.decision.action, selectedQuestionId: outcome.decision.selectedQuestionId ?? null, mechanism: update.mechanism });
+  logTurn(deps, "start", ledger, { revision: 0, action: outcome.decision.action, selectedQuestionId: outcome.decision.selectedQuestionId ?? null, mechanism: update.mechanism, ...pairFields(deps, final) });
   return toView(deps, final, null, outcome.decision, token, 0, liveExtras(deps, ledger, outcome, update));
 }
 
@@ -436,8 +486,14 @@ function preferenceDelta(before: SessionState["session"], after: SessionState["s
 const nowOf = (deps: DiscoveryDeps) => (deps.now ?? Date.now)();
 
 export async function startDiscovery(deps: DiscoveryDeps, input: StartRequest): Promise<DiscoveryView> {
-  assertEnabledPair(input);
-  if (deps.boundedAgent) return startLive(deps, input);
+  let access: PairAccess;
+  try {
+    access = assertEnabledPair(input, deps.config.verification.pairs);
+  } catch (error) {
+    logEvent("info", "discovery.pair_rejected", { requestId: deps.requestId, sourceType: input.sourceType, targetType: input.targetType, capability: pairAccess(input.sourceType, input.targetType) });
+    throw error;
+  }
+  if (deps.boundedAgent) return startLive(deps, input, access);
   const seed = await resolveSeed(deps, input);
   const session = createSession({
     anchorIds: [seed.entityId],
@@ -553,6 +609,7 @@ async function answerLive(
     response: answer.response,
     preferenceChanges: delta.all.length,
     mechanism: update.mechanism,
+    ...pairFields(deps, next),
   });
   return toView(deps, next, state.order, outcome.decision, token, lease.revision + 1, liveExtras(deps, ledger, outcome, update));
 }
@@ -584,6 +641,6 @@ export async function finishDiscovery(deps: DiscoveryDeps, sessionToken: string)
   // Lock-free CAS: fails with 409 if an answer holds the lease or already advanced the revision.
   const finished = withOrder(finishState(state, "user_finished"), state.order);
   const token = await sessions.commit(loaded, finished);
-  logEvent("info", "discovery.finish", { requestId: deps.requestId, revision: loaded.revision + 1, sessionStore: deps.store.kind, latencyMs: Math.round(performance.now() - startedAt) });
+  logEvent("info", "discovery.finish", { requestId: deps.requestId, revision: loaded.revision + 1, sessionStore: deps.store.kind, latencyMs: Math.round(performance.now() - startedAt), ...pairFields(deps, finished) });
   return toView(deps, finished, state.order, decision, token, loaded.revision + 1);
 }

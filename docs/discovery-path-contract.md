@@ -1,5 +1,7 @@
 # Discovery Path & domain capability contract (S9.2)
 
+> **S9.3 update:** the registry now covers six domains and all 30 directed pairs, and three pairs are enabled (movie→book, music_artist→book, movie→music_artist). The domain and pair tables below describe S9.2; the current state is in `docs/cross-domain-engine.md`. The Discovery Path contract here is unchanged.
+
 Baseline: S9.1 `9dd3ffe` on `seg/S9-2-discovery-path`. S9.2 adds a server-owned registry of domain pairs and a pure, evidence-grounded presentation of the final shortlist. The recommendation engine, sessions, budgets and question pipeline are unchanged.
 
 ## 1. Registry (`src/lib/contracts/capabilities.ts`)

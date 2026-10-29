@@ -10,7 +10,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["scripts/probe-pivot.test.ts"],
+    // Live probes; each npm script names exactly one file so no run spends another probe's budget.
+    include: ["scripts/probe-pivot.test.ts", "scripts/probe-cross-domain.test.ts"],
     testTimeout: 30_000,
     fileParallelism: false,
     disableConsoleIntercept: true,

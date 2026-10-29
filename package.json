@@ -29,7 +29,8 @@
     "optimize:question-quality": "vitest run tests/evaluation/question-optimization.test.ts --reporter=verbose",
     "evaluate:question-wording": "vitest run tests/evaluation/question-wording.test.ts --reporter=verbose",
     "probe:live": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/probe-live.mjs",
-    "probe:pivot": "vitest run --config scripts/vitest.pivot.config.mts"
+    "probe:pivot": "vitest run --config scripts/vitest.pivot.config.mts scripts/probe-pivot.test.ts",
+    "probe:cross-domain": "vitest run --config scripts/vitest.pivot.config.mts scripts/probe-cross-domain.test.ts"
   },
   "dependencies": {
     "@upstash/redis": "1.39.0",

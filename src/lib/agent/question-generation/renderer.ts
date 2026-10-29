@@ -1,4 +1,4 @@
-import { domainLanguageOfPlural, type RecommendationCandidate } from "@/lib/contracts";
+import { domainLanguageOfNoun, domainLanguageOfPlural, type RecommendationCandidate } from "@/lib/contracts";
 import type { ProposedQuestion } from "./schema";
 
 export type RenderingStrategy = "s8_6" | "deterministic" | "preserve" | "hybrid";
@@ -10,11 +10,26 @@ const clean = (value: string) => value.trim().replace(/\s+/g, " ");
 const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const bareType = (value: string) => value.trim().replace(/^urn:tag:/, "");
 
+const registryWording = (label: string, noun: TargetNoun) => domainLanguageOfPlural(noun).tagQuestion.replace("{label}", clean(label));
+
 function faithfulPatterns(label: string, noun: TargetNoun): RegExp[] {
   const value = escaped(clean(label));
-  const { narrative } = domainLanguageOfPlural(noun);
-  const item = narrative ? `(?:${escaped(noun)}|stories)` : `(?:${escaped(noun)})`;
+  const { narrative, verb } = domainLanguageOfPlural(noun);
+  const exact = new RegExp(`^${escaped(registryWording(label, noun))}$`, "i");
+  if (!narrative) {
+    // Non-narrative targets (music artists, games, podcasts): never "stories"/"storytelling".
+    const item = `(?:${escaped(noun)})`;
+    return [
+      exact,
+      new RegExp(`^(?:do|would) you (?:enjoy|like|prefer) ${value} ${item}\\?$`, "i"),
+      new RegExp(`^(?:do|would) you (?:enjoy|like|prefer) ${item} (?:associated with|featuring|with|about) ${value}\\?$`, "i"),
+      new RegExp(`^(?:are|would) you (?:be )?(?:drawn to|interested in) ${item} (?:associated with|about|featuring|with) ${value}\\?$`, "i"),
+      new RegExp(`^would you like to ${escaped(verb)} more ${value}\\?$`, "i"),
+    ];
+  }
+  const item = `(?:${escaped(noun)}|stories)`;
   return [
+    exact,
     new RegExp(`^(?:do|would) you (?:enjoy|like|prefer) (?:more )?${value}(?: ${item}| storytelling)?\\?$`, "i"),
     new RegExp(`^(?:do|would) you (?:enjoy|like|prefer) ${item} (?:about|built around|centered on|exploring|featuring|that explore|with) ${value}\\?$`, "i"),
     new RegExp(`^are you (?:drawn to|interested in) ${item} (?:about|centered on|exploring|featuring|with) ${value}\\?$`, "i"),
@@ -41,6 +56,8 @@ export function deterministicTagWording(
   noun: TargetNoun,
 ): string {
   const value = clean(label);
+  // Non-narrative targets keep the registry's own phrasing for every tag type.
+  if (!domainLanguageOfPlural(noun).narrative) return registryWording(value, noun);
   switch (bareType(type)) {
     case "genre:media":
     case "genre:qloo":
@@ -70,7 +87,8 @@ export function renderTagQuestion(input: {
 }): string {
   const { proposal, tag, noun } = input;
   const generated = clean(proposal.questionText);
-  const conservative = `Do you enjoy ${clean(tag.name)} ${noun}?`;
+  // Registry wording; for books/movies this is exactly "Do you enjoy <label> <noun>?".
+  const conservative = registryWording(tag.name, noun);
   if (input.strategy === "s8_6") return conservative;
   if (input.strategy === "deterministic") return deterministicTagWording(tag.name, tag.type, noun);
   const faithful = isSemanticallyFaithfulTagWording(generated, tag.name, noun);
@@ -91,9 +109,11 @@ export function renderEntityQuestion(input: {
   const b = escaped(clean(input.bName));
   const quotedA = `[“\"]${a}[”\"]`;
   const quotedB = `[“\"]${b}[”\"]`;
+  const { narrative, verb } = domainLanguageOfNoun(input.noun);
+  const verbs = narrative ? "(?:read|watch)" : escaped(verb);
   const safe = [
-    new RegExp(`^which ${input.noun} sounds more appealing: ${quotedA} or ${quotedB}\\?$`, "i"),
-    new RegExp(`^which would you rather (?:read|watch): ${quotedA} or ${quotedB}\\?$`, "i"),
+    new RegExp(`^which ${escaped(input.noun)} sounds more appealing: ${quotedA} or ${quotedB}\\?$`, "i"),
+    new RegExp(`^which would you rather ${verbs}: ${quotedA} or ${quotedB}\\?$`, "i"),
   ].some((pattern) => pattern.test(generated));
   return safe
     ? generated

@@ -28,6 +28,9 @@ export type RawInsightEntity = {
   entity_id: string;
   name: string;
   subtype: string;
+  /** Qloo also returns a separate `type` (and sometimes `types[]`); kept verbatim for classification. */
+  type?: string;
+  types?: string[];
   /** Qloo affinity for live data; a synthetic score for fixtures. */
   query?: { affinity?: number; explainability?: unknown };
   popularity?: number;

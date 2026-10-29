@@ -74,7 +74,9 @@ describe("GET /api/health and /api/entities/search", () => {
 
   it("validates search query parameters", async () => {
     await fail(await searchRoute(new Request(`${BASE}/entities/search`)), 400, "VALIDATION_ERROR");
-    await fail(await searchRoute(new Request(`${BASE}/entities/search?q=x&type=podcast`)), 400, "VALIDATION_ERROR");
+    await fail(await searchRoute(new Request(`${BASE}/entities/search?q=x&type=magazine`)), 400, "VALIDATION_ERROR");
+    // A registered domain that is not an enabled source is a registry rejection, not a schema error.
+    await fail(await searchRoute(new Request(`${BASE}/entities/search?q=x&type=podcast`)), 400, "UNSUPPORTED_DOMAIN");
   });
 
   it("returns 429 with Retry-After before a second protected search", async () => {
@@ -283,18 +285,23 @@ describe("POST /api/discovery/finish", () => {
 describe("S9.2 domain registry and Discovery Path over HTTP", () => {
   it("health exposes only enabled pairs", async () => {
     const json = await (await healthRoute()).json();
-    expect(json.data.capabilities).toEqual({ pairs: [{ source: "movie", target: "book", sourceLabel: "movie", targetLabel: "books" }] });
+    expect(json.data.capabilities.pairs).toEqual([
+      { source: "movie", target: "book", sourceLabel: "movie", targetLabel: "books" },
+      { source: "movie", target: "music_artist", sourceLabel: "movie", targetLabel: "music artists" },
+      { source: "music_artist", target: "book", sourceLabel: "music artist", targetLabel: "books" },
+    ]);
   });
 
   it("rejects unsupported pairs and domain values with clear errors", async () => {
     await fail(await startRoute(post("/discovery/start", { ...START_BODY, sourceType: "book", targetType: "movie" })), 400, "UNSUPPORTED_DOMAIN");
     await fail(await startRoute(post("/discovery/start", { ...START_BODY, targetType: "movie" })), 400, "UNSUPPORTED_DOMAIN");
-    await fail(await startRoute(post("/discovery/start", { ...START_BODY, sourceType: "music_artist" })), 400, "VALIDATION_ERROR");
+    await fail(await startRoute(post("/discovery/start", { ...START_BODY, sourceType: "podcast" })), 400, "UNSUPPORTED_DOMAIN");
+    await fail(await startRoute(post("/discovery/start", { ...START_BODY, sourceType: "magazine" })), 400, "VALIDATION_ERROR");
     await fail(await startRoute(post("/discovery/start", { ...START_BODY, pairEnabled: true })), 400, "VALIDATION_ERROR");
     await fail(await searchRoute(new Request(`${BASE}/entities/search?q=alpha&type=book`)), 400, "UNSUPPORTED_DOMAIN");
   });
 
-  it("Movie → Books: start → answer → finish returns a grounded Discovery Path", async () => {
+  it("Movie â†’ Books: start â†’ answer â†’ finish returns a grounded Discovery Path", async () => {
     const v0 = await start();
     expect(v0.discoveryPath).toBeUndefined();
     const v1 = await ok(await answer(v0, "like"));

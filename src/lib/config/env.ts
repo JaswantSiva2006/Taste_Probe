@@ -1,7 +1,7 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { MAX_QUESTIONS_LIMIT, type ProviderMode } from "@/lib/contracts";
+import { MAX_QUESTIONS_LIMIT, pairStatus, type ProviderMode } from "@/lib/contracts";
 import { AppError } from "@/lib/validation/errors";
 
 /**
@@ -67,6 +67,9 @@ const EnvSchema = z.object({
   ENABLE_EVALUATION_LOGGING: bool(false),
   ENABLE_AGENT_TRACING: bool(false),
   SENTRY_DSN: optionalString,
+  // S9.3 isolated internal verification: comma-separated registered pairs ("music_artist->book").
+  // Refused in production; never exposed publicly; cannot admit unregistered pairs.
+  VERIFICATION_PAIRS: optionalString,
 });
 
 export type AppConfig = {
@@ -101,8 +104,26 @@ export type AppConfig = {
     agentTracing: boolean;
     expensiveOperations: boolean;
   };
+  /** Registered-but-disabled pairs admitted for internal verification (never in production). */
+  verification: { pairs: string[] };
   sentryDsn?: string;
 };
+
+/** Parses VERIFICATION_PAIRS; only registered, currently disabled pairs are accepted. */
+function verificationPairs(e: z.infer<typeof EnvSchema>): string[] {
+  if (!e.VERIFICATION_PAIRS) return [];
+  if (e.NODE_ENV === "production") {
+    throw new AppError("CONFIG_ERROR", 500, "VERIFICATION_PAIRS is not allowed in production");
+  }
+  const pairs = [...new Set(e.VERIFICATION_PAIRS.split(",").map((p) => p.trim()).filter(Boolean))];
+  for (const pair of pairs) {
+    const [source = "", target = ""] = pair.split("->");
+    if (pairStatus(source, target) !== "disabled") {
+      throw new AppError("CONFIG_ERROR", 500, "VERIFICATION_PAIRS may only list registered, disabled pairs");
+    }
+  }
+  return pairs;
+}
 
 export const MIN_SECRET_LENGTH = 32;
 
@@ -233,6 +254,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       agentTracing: e.ENABLE_AGENT_TRACING,
       expensiveOperations: e.ENABLE_EXPENSIVE_OPERATIONS,
     },
+    verification: { pairs: verificationPairs(e) },
     sentryDsn: e.SENTRY_DSN,
   };
 }

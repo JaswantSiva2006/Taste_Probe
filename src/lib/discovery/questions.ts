@@ -1,5 +1,6 @@
 import {
   domainLabel,
+  tagQuestionText,
   type EntityType,
   type Question,
   type RankedRecommendation,
@@ -25,12 +26,12 @@ function tagQuestions(candidates: RecommendationCandidate[], targetType: EntityT
       tags.set(tag.id, entry);
     }
   }
-  const noun = domainLabel(targetType, true);
   return [...tags.entries()]
     .filter(([, tag]) => tag.count > 0 && tag.count < candidates.length)
     .map(([tagId, tag]) => ({
       questionId: tagQuestionId(tagId),
-      text: `Do you enjoy ${tag.name} ${noun}?`,
+      // Domain-aware wording from the registry; the verified label is inserted verbatim.
+      text: tagQuestionText(targetType, tag.name),
       targetType: "tag" as const,
       targetIds: [tagId],
       allowedResponses: ["like", "dislike", "unknown"] as Question["allowedResponses"],

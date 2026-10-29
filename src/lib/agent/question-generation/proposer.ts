@@ -1,5 +1,5 @@
 import "server-only";
-import type { EntitySummary, Question, RankedRecommendation, TasteSession } from "@/lib/contracts";
+import { domainLabel, domainLanguageOfPlural, type EntitySummary, type Question, type RankedRecommendation, type TasteSession } from "@/lib/contracts";
 import { sanitizeText } from "@/lib/agent/context";
 import { estimateCostUsd, usageFrom, type TokenUsage } from "@/lib/agent/pricing";
 import type { GeminiTransport } from "@/lib/agent/gemini-transport";
@@ -79,6 +79,16 @@ export function buildQuestionEvidence(input: {
   };
 }
 
+/** Target-domain wording guidance from the registry; narrative media may use "stories", others never. */
+function wordingInstruction(targetType: string): string {
+  const plural = domainLabel(targetType, true);
+  const { narrative, verb, tagQuestion } = domainLanguageOfPlural(plural);
+  if (narrative) {
+    return `Use the exact verified tag label without reinterpreting it. Put it into one concise positive intent such as: Do you like stories that explore <exact tag>?, Do you enjoy <exact tag> storytelling?, or Would you like to ${verb} more <exact tag>?.`;
+  }
+  return `The recommendations are ${plural}, not stories: never describe them as stories, books, or storytelling. Use the exact verified tag label without reinterpreting it, in one concise positive intent such as: ${tagQuestion.replace("{label}", "<exact tag>")}`;
+}
+
 export function buildQuestionGenerationRequest(bundle: QuestionEvidenceBundle, temperature: number) {
   return {
     systemInstruction: {
@@ -93,7 +103,7 @@ export function buildQuestionGenerationRequest(bundle: QuestionEvidenceBundle, t
           "Entity supportedAnswerTypes must be exactly prefer_a, prefer_b, both, neither, unknown.",
           "Every target tag must be cited on an entity that actually carries it; both target entities must appear in evidence.",
           "Prefer questions that reveal why the seed appeals; avoid merely confirming a broad genre when a supported, more specific dimension exists.",
-          "Use the exact verified tag label without reinterpreting it. Put it into one concise positive intent such as: Do you like stories that explore <exact tag>?, Do you enjoy <exact tag> storytelling?, or Would you like to read more <exact tag>?.",
+          wordingInstruction(bundle.targetType),
           "Allocate up to 8 proposals across supported themes, atmosphere/style, narrative focus, and grounded title comparisons; do not force a category without evidence.",
           "Avoid adult/age, format, technical metadata, vague labels, unsupported themes, and paraphrased semantic claims.",
           "Return at most 8 distinct proposals; fewer is acceptable.",

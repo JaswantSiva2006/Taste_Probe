@@ -136,6 +136,8 @@ export const FinishReasonSchema = z.enum([
   "user_finished",
   "question_budget_exhausted",
   "stable_recommendations",
+  /** S9.3: the verified candidates supported no grounded question, so none was asked. */
+  "insufficient_question_evidence",
 ]);
 export type FinishReason = z.infer<typeof FinishReasonSchema>;
 

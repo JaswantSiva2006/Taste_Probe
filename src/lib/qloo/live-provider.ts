@@ -80,10 +80,13 @@ export function parseInsightsResponse(value: unknown): RawInsightsResponse {
     if (!entity || !nonEmpty(entity.entity_id) || !nonEmpty(entity.name) || !nonEmpty(entity.subtype)) return [];
     const affinity = finite(query?.affinity);
     const popularity = finite(entity.popularity);
+    const types = Array.isArray(entity.types) ? entity.types.filter(nonEmpty) : [];
     return [{
       entity_id: entity.entity_id,
       name: entity.name,
       subtype: entity.subtype,
+      ...(nonEmpty(entity.type) ? { type: entity.type } : {}),
+      ...(types.length ? { types } : {}),
       ...(popularity === undefined ? {} : { popularity }),
       ...(affinity === undefined && query?.explainability === undefined ? {} : {
         query: {

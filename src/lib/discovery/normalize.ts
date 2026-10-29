@@ -20,6 +20,14 @@ import type {
 /** Wire type → session domain via the S9.2 registry; unregistered types stay unrecognised. */
 const toEntityType = (urn: string | undefined): EntityType | undefined => sessionDomainOfQlooType(urn);
 
+/**
+ * Insights classification: Qloo may carry the specific kind in `subtype`, `type`
+ * or `types[]`, so all are checked — but only exact registry URNs count, and
+ * `subtype` wins. Nothing is inferred from names or tags.
+ */
+const classify = (raw: RawInsightEntity): EntityType | undefined =>
+  [raw.subtype, raw.type, ...(raw.types ?? [])].map(toEntityType).find((t) => t !== undefined);
+
 export function normalizeEntity(
   raw: RawSearchEntity,
   provenance: ProviderResult<unknown>["provenance"],
@@ -52,7 +60,7 @@ function normalizeCandidate(
   const base = {
     entityId: raw.entity_id,
     name: raw.name,
-    entityType: toEntityType(raw.subtype) ?? raw.subtype,
+    entityType: classify(raw) ?? raw.subtype,
     rank,
     ...(raw.properties?.description === undefined ? {} : { description: raw.properties.description }),
     ...(raw.properties?.image?.url === undefined ? {} : { imageUrl: raw.properties.image.url }),
@@ -100,4 +108,20 @@ export function normalizeRecommendations(
     return true;
   });
   return unique.slice(0, limit).map((raw, index) => normalizeCandidate(raw, index + 1, result, seedEntityIds));
+}
+
+/**
+ * Normalizes and keeps only candidates of the requested target domain with the
+ * expected provenance. Anything else is rejected (counted), never coerced into
+ * the target domain. Qloo's order and affinities are preserved.
+ */
+export function normalizeTargetCandidates(
+  result: ProviderResult<RawInsightsResponse>,
+  seedEntityIds: string[],
+  limit: number,
+  target: { targetType: EntityType; provenance: ProviderResult<unknown>["provenance"] },
+): { candidates: RecommendationCandidate[]; rejected: number } {
+  const all = normalizeRecommendations(result, seedEntityIds, limit);
+  const candidates = all.filter((c) => c.entityType === target.targetType && c.evidence.source === target.provenance);
+  return { candidates, rejected: all.length - candidates.length };
 }

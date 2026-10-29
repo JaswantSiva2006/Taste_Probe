@@ -1,4 +1,4 @@
-import type { Question, RecommendationCandidate } from "@/lib/contracts";
+import { DOMAINS, type Question, type RecommendationCandidate } from "@/lib/contracts";
 
 export type SemanticQuestionScores = {
   clarity: number;
@@ -11,7 +11,8 @@ export type SemanticQuestionScores = {
 
 const clamp5 = (value: number) => Math.min(5, Math.max(1, value));
 const round = (value: number) => Math.round(value * 1000) / 1000;
-const mechanical = /^do you enjoy .+ (books|movies)\?$/i;
+const plurals = Object.values(DOMAINS).map((d) => d.plural.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+const mechanical = new RegExp(`^do you enjoy .+ (${plurals})\\?$`, "i");
 const vague = /^(immersive|adult|general|popular|other|fiction|nonfiction|science fiction|fantasy|magic|adventure|action|thriller|horror|mystery|drama|romance|books?|movies?)$/i;
 
 /** Auditable heuristic rubric. These scores are proxies, never human ratings. */
