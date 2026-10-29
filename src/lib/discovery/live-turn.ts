@@ -187,7 +187,11 @@ async function eligibleTraces(deps: LiveDeps, state: SessionState, ledger: LiveL
   }
   const source = generated ?? buildQuestionCandidates(state.candidates, state.session.targetType);
   const questions = availableQuestions(source, state.session);
-  const eligible = optimizeQuestions(questions, ranked, { askedQuestionIds: state.session.askedQuestionIds, preferences: state.session }).eligible;
+  const eligible = optimizeQuestions(questions, ranked, {
+    askedQuestionIds: state.session.askedQuestionIds,
+    preferences: state.session,
+    profile: deps.config.features.questionGenerationMode === "llm_grounded" ? "quality_v1" : "s5",
+  }).eligible;
   if (ledger.questionGeneration && eligible[0]) {
     ledger.questionGeneration.selected = {
       questionId: eligible[0].question.questionId,

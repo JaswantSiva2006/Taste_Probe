@@ -114,6 +114,19 @@ async function main() {
     assert.ok(view.trace.qlooRequests <= 2, "start exceeded two Qloo requests");
     assert.ok(view.trace.geminiRequests <= 3, "start exceeded three Gemini requests");
     assert.ok((view.trace.estimatedGeminiCostUsd ?? 1) < 0.5, "Gemini cost cap exceeded");
+    const before = view.recommendations.map((item) => item.candidate.entityId);
+    const answerValue = view.currentQuestion.targetType === "tag" ? "like" : "prefer_a";
+    const answer = await call(base, "/api/discovery/answer", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionToken: view.sessionToken, questionId: view.currentQuestion.questionId, response: answerValue }),
+    });
+    assert.equal(answer.response.status, 200, JSON.stringify(answer.json.error));
+    const updated = answer.json.data;
+    const after = updated.recommendations.map((item) => item.candidate.entityId);
+    assert.notDeepEqual(after, before, "executable answer mapping did not update recommendation order");
+    const totalCost = (view.trace.estimatedGeminiCostUsd ?? 0) + (updated.trace?.estimatedGeminiCostUsd ?? 0);
+    assert.ok(totalCost < 0.5, "combined live trial Gemini cost cap exceeded");
     console.log(JSON.stringify({
       status: "PASS",
       level: "HTTP routes",
@@ -122,14 +135,16 @@ async function main() {
       rejected: generation.rejected,
       fallbackReason: generation.fallbackReason,
       selectedQuestion: view.currentQuestion.text,
+      availableCandidateCount: view.recommendations.length,
       evidenceIds: generation.selected.evidenceIds,
       components: generation.selected.components,
       counterfactualTop5: { positive: generation.selected.positiveTop, negative: generation.selected.negativeTop },
-      qlooRequests: 3,
-      geminiRequests: view.trace.geminiRequests,
+      recommendationUpdate: { response: answerValue, rankingChanged: updated.rankingChanged, before: before.slice(0, 5), after: after.slice(0, 5) },
+      qlooRequests: 3 + (updated.trace?.qlooRequests ?? 0),
+      geminiRequests: view.trace.geminiRequests + (updated.trace?.geminiRequests ?? 0),
       tokens: view.trace.geminiTokens,
-      estimatedGeminiCostUsd: view.trace.estimatedGeminiCostUsd,
-      routeLatencyMs: view.trace.latencyMs,
+      estimatedGeminiCostUsd: totalCost,
+      routeLatencyMs: view.trace.latencyMs + (updated.trace?.latencyMs ?? 0),
       wallLatencyMs: Date.now() - wallStarted,
     }, null, 2));
   } catch (error) {

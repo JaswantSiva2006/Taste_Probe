@@ -1,0 +1,23 @@
+{
+  "datasetVersion": "s8.6-v1",
+  "provenance": "Synthetic held-out fixtures; not observed Qloo data",
+  "methodLabelsHidden": true,
+  "rubric": {
+    "scale": "1-5",
+    "dimensions": ["clarity", "naturalness", "answerability", "relevance", "preference usefulness"],
+    "instruction": "Rate each question independently from the identical scenario context. Do not infer which system produced A or B."
+  },
+  "humanEvaluation": "NOT_PERFORMED",
+  "samples": [
+    { "scenario": "held_out-20-moral-ambiguity", "A": "Would you enjoy moral ambiguity?", "B": "Do you enjoy moral ambiguity books?" },
+    { "scenario": "held_out-21-found-family", "A": "Do you enjoy found family books?", "B": "Would you enjoy found family?" },
+    { "scenario": "held_out-22-slow-burn", "A": "Would you enjoy slow-burn tension?", "B": "Do you enjoy slow-burn tension books?" },
+    { "scenario": "held_out-23-unreliable-narrator", "A": "Do you enjoy unreliable narrators books?", "B": "Would you enjoy unreliable narrators?" },
+    { "scenario": "held_out-24-political-intrigue", "A": "Would you enjoy political intrigue?", "B": "Do you enjoy political intrigue books?" },
+    { "scenario": "held_out-25-scientific-rigor", "A": "Do you enjoy Science Fiction books?", "B": "Would you enjoy scientific rigor?" },
+    { "scenario": "held_out-26-intimate-character", "A": "Would you enjoy intimate character study?", "B": "Do you enjoy intimate character study books?" },
+    { "scenario": "held_out-27-mythic", "A": "Do you enjoy mythic atmosphere books?", "B": "Would you enjoy mythic atmosphere?" },
+    { "scenario": "held_out-28-social-satire", "A": "Would you enjoy social satire?", "B": "Do you enjoy social satire books?" },
+    { "scenario": "held_out-29-nonlinear", "A": "Do you enjoy nonlinear storytelling books?", "B": "Would you enjoy nonlinear storytelling?" }
+  ]
+}

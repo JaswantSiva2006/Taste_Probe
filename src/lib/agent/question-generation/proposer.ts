@@ -9,8 +9,8 @@ import { proposedQuestionResponseSchema } from "./schema";
 
 const MAX_EVIDENCE_CANDIDATES = 30;
 const MAX_TAGS = 8;
-const MAX_DESCRIPTION = 180;
-const MAX_OUTPUT_TOKENS = 4096;
+const MAX_DESCRIPTION = 140;
+const MAX_OUTPUT_TOKENS = 2048;
 
 export type QuestionEvidenceBundle = {
   source: { entityId: string; name: string };
@@ -92,8 +92,11 @@ export function buildQuestionGenerationRequest(bundle: QuestionEvidenceBundle, t
           "Tag supportedAnswerTypes must be exactly like, dislike, unknown.",
           "Entity supportedAnswerTypes must be exactly prefer_a, prefer_b, both, neither, unknown.",
           "Every target tag must be cited on an entity that actually carries it; both target entities must appear in evidence.",
+          "Prefer questions that reveal why the seed appeals; avoid merely confirming a broad genre when a supported, more specific dimension exists.",
+          "Use short natural wording. Safe tag forms include: Would you enjoy <exact tag>?, Are you drawn to <exact tag> stories?, or Would you prefer books with <exact tag>?.",
+          "Allocate up to 8 proposals across supported themes, atmosphere/style, narrative focus, and grounded title comparisons; do not force a category without evidence.",
           "Avoid adult/age, format, technical metadata, vague labels, unsupported themes, and paraphrased semantic claims.",
-          "Return 10-15 diverse proposals only when evidence supports them; fewer is acceptable.",
+          "Return at most 8 distinct proposals; fewer is acceptable.",
         ].join(" "),
       }],
     },

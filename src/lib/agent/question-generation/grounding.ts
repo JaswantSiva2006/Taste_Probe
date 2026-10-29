@@ -22,6 +22,20 @@ const sameSet = (a: string[], b: string[]) => {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 };
 const normalized = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function safeTagText(proposal: ProposedQuestion, tagName: string, noun: string): string {
+  const tag = escaped(tagName.trim());
+  const patterns = [
+    new RegExp(`^would you (?:enjoy|like) (?:more )?${tag}(?: ${noun})?\\?$`, "i"),
+    new RegExp(`^are you drawn to ${tag} (?:stories|${noun})\\?$`, "i"),
+    new RegExp(`^would you prefer ${noun} with ${tag}\\?$`, "i"),
+    new RegExp(`^do you like (?:${noun}|stories) (?:with|featuring) ${tag}\\?$`, "i"),
+    new RegExp(`^do you enjoy ${tag} ${noun}\\?$`, "i"),
+  ];
+  const text = proposal.questionText.trim().replace(/\s+/g, " ");
+  return patterns.some((pattern) => pattern.test(text)) ? text : `Do you enjoy ${tagName.trim()} ${noun}?`;
+}
 
 function reject(report: ValidationReport, reason: ProposalRejection): void {
   report.rejected += 1;
@@ -47,7 +61,7 @@ function canonicalTagQuestion(proposal: ProposedQuestion, candidates: Recommenda
   const noun = carriers[0]!.entityType === "book" ? "books" : "movies";
   return {
     questionId: "tag:" + tagId,
-    text: "Do you enjoy " + tag.name.trim() + " " + noun + "?",
+    text: safeTagText(proposal, tag.name, noun),
     targetType: "tag",
     targetIds: [tagId],
     allowedResponses: ["like", "dislike", "unknown"],

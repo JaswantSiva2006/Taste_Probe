@@ -17,7 +17,7 @@ export const ProposedQuestionSchema = z.object({
 }).strict();
 
 export const ProposedQuestionBatchSchema = z.object({
-  proposals: z.array(ProposedQuestionSchema).max(15),
+  proposals: z.array(ProposedQuestionSchema).max(8),
 }).strict();
 
 export type ProposedQuestion = z.infer<typeof ProposedQuestionSchema>;
@@ -27,7 +27,7 @@ export const proposedQuestionResponseSchema = {
   properties: {
     proposals: {
       type: "ARRAY",
-      maxItems: 15,
+      maxItems: 8,
       items: {
         type: "OBJECT",
         properties: {

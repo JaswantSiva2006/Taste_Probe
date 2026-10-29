@@ -56,7 +56,7 @@ describe("deterministic proposal grounding", () => {
     expect(report).toMatchObject({ generated: 2, accepted: 2, rejected: 0 });
     expect(report.questions[0]).toMatchObject({
       questionId: "tag:tag:space",
-      text: "Do you enjoy Space opera books?",
+      text: "Would you like more space opera?",
       targetIds: ["tag:space"],
     });
     expect(report.questions[1]?.questionId).toBe("entity:qloo:book:1|qloo:book:3");
@@ -84,6 +84,14 @@ describe("deterministic proposal grounding", () => {
     };
     expect(validateProposedQuestions({ proposals: [proposal] }, books, session()).rejectionCounts)
       .toMatchObject({ unsupported_semantics: 1 });
+  });
+
+  it("falls back to canonical wording when generated phrasing exceeds the verified intent", () => {
+    const report = validateProposedQuestions({
+      proposals: [{ ...validTag, questionText: "Would you like emotionally profound cosmic journeys?" }],
+    }, candidates, session());
+    expect(report).toMatchObject({ accepted: 1, rejected: 0 });
+    expect(report.questions[0]?.text).toBe("Do you enjoy Space opera books?");
   });
 
   it("rejects duplicates, repeated dimensions, and previously asked questions", () => {
@@ -126,7 +134,8 @@ describe("bounded Gemini question proposer", () => {
     expect(evidence.candidates.every((item) => item.tags.length <= 8)).toBe(true);
     const request = buildQuestionGenerationRequest(evidence, 0.2);
     expect(request.generationConfig.responseMimeType).toBe("application/json");
-    expect(request.generationConfig.maxOutputTokens).toBe(4096);
+    expect(request.generationConfig.maxOutputTokens).toBe(2048);
+    expect(request.generationConfig.responseSchema.properties.proposals.maxItems).toBe(8);
     expect(JSON.stringify(request)).not.toContain("x-goog-api-key");
   });
 

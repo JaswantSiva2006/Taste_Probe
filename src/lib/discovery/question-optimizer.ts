@@ -1,6 +1,7 @@
 import type { Question, RankedRecommendation, RecommendationCandidate } from "@/lib/contracts";
 import { orderOf, rankCandidates, type PreferenceSets } from "./ranking";
 import { isUsefulTag } from "./tag-quality";
+import { orderAwareSeparation, semanticQuestionScores } from "./question-quality";
 
 export const DEFAULT_TAU = 3;
 export const DEFAULT_TOP_K = 5;
@@ -30,6 +31,7 @@ export type OptimizerOptions = {
   topK?: number;
   askedQuestionIds?: string[];
   preferences?: PreferenceSets;
+  profile?: "s5" | "quality_v1";
 };
 type ResolvedOptions = Required<Omit<OptimizerOptions, "preferences">> & { preferences: PreferenceSets };
 
@@ -211,7 +213,12 @@ function scoreTrace(
   const i = interpretability(question, candidates);
   const r = redundancy(question, candidates, options.askedQuestionIds);
   const u = ambiguity(question, candidates);
-  const final = 0.4 * entropy + 0.25 * separation + 0.25 * i - 0.05 * r - 0.05 * u;
+  const legacy = 0.4 * entropy + 0.25 * separation + 0.25 * i - 0.05 * r - 0.05 * u;
+  const semantic = (semanticQuestionScores(question, candidates).mean - 1) / 4;
+  const ordered = orderAwareSeparation(ranks.positive, ranks.negative, options.topK);
+  const final = options.profile === "quality_v1"
+    ? 0.6 * legacy + 0.25 * semantic + 0.15 * ordered
+    : legacy;
   const reason = !supported
     ? "rejected_unsupported"
     : repeated
@@ -247,6 +254,7 @@ export function optimizeQuestions(
     topK: options.topK ?? DEFAULT_TOP_K,
     askedQuestionIds: options.askedQuestionIds ?? [],
     preferences: options.preferences ?? emptyPreferences(),
+    profile: options.profile ?? "s5",
   };
   const traces = questions.map((question) => scoreTrace(question, ranked, resolved));
   const eligible = traces
