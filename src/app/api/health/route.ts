@@ -1,5 +1,5 @@
 import type { HealthData } from "@/lib/contracts";
-import { DETERMINISTIC_MOCK_AGENT_NAME } from "@/lib/agent/mock-agent";
+import { agentLabel } from "@/lib/agent/factory";
 import { LIVE_QLOO_IMPLEMENTED } from "@/lib/qloo";
 import { handleApi } from "@/lib/validation/http";
 
@@ -11,6 +11,6 @@ export async function GET(): Promise<Response> {
     status: "ok",
     mode: config.mode,
     qloo: { mode: config.mode, implemented: config.mode === "mock" || LIVE_QLOO_IMPLEMENTED },
-    agent: DETERMINISTIC_MOCK_AGENT_NAME,
+    agent: agentLabel(config),
   }));
 }

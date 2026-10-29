@@ -1,13 +1,37 @@
 import "server-only";
-import type { AgentDecision, AnswerRequest, DiscoveryView, EntitySummary, FinishReason, Question, StartRequest } from "@/lib/contracts";
+import type {
+  AgentDecision,
+  AnswerRequest,
+  DiscoveryView,
+  EntitySummary,
+  FinishReason,
+  Question,
+  RecommendationUpdate,
+  StartRequest,
+  TurnTrace,
+} from "@/lib/contracts";
+import type { AgentMode, BoundedAgent } from "@/lib/agent/bounded";
+import { MAX_REQUESTS_PER_DECISION } from "@/lib/agent/gemini-agent";
 import type { DiscoveryAgent } from "@/lib/agent/types";
 import { validateAgentDecision } from "@/lib/agent/validate";
 import type { AppConfig } from "@/lib/config/env";
+import { logEvent } from "@/lib/telemetry/logger";
 import type { QlooProvider } from "@/lib/qloo/provider";
 import { createSessionService, type Lease, type SessionService } from "@/lib/session/service";
 import { createSession, type SessionState } from "@/lib/session/state";
 import type { SessionStore } from "@/lib/session/store";
 import { AppError } from "@/lib/validation/errors";
+import {
+  applyLedger,
+  countingProvider,
+  decideAndExecute,
+  newLedger,
+  retrieve,
+  traceOf,
+  type LiveDeps,
+  type LiveLedger,
+  type LiveOutcome,
+} from "./live-turn";
 import { normalizeEntity, normalizeRecommendations, normalizeSearchResults } from "./normalize";
 import { applyAnswer, buildAnswer } from "./preferences";
 import {
@@ -27,6 +51,11 @@ export type DiscoveryDeps = {
   agent: DiscoveryAgent;
   /** Authoritative session state (memory in dev/tests, Redis in production). */
   store: SessionStore;
+  /**
+   * S6 bounded agent. Present in live mode (createDiscoveryDeps): turns then run
+   * the S7 live loop. Absent in mock mode, which keeps the original S1–S5 path.
+   */
+  boundedAgent?: BoundedAgent;
   selectQuestions?: QuestionSelector;
   now?: () => number;
 };
@@ -38,8 +67,21 @@ const RETRIEVAL_ATTEMPT_CAP = 2;
 /** External usage incurred by one request, kept even when the request later fails. */
 type UsageLedger = { qlooCalls: number; toolCalls: number };
 
+/**
+ * Live turns hold the S4 lease across Qloo and Gemini calls, so the lease must
+ * outlive their worst case: 2 Qloo attempts plus 2 decisions x 2 Gemini requests, plus slack.
+ */
+const leaseTtlFor = (config: AppConfig) =>
+  config.qloo.timeoutMs * 2 + config.llm.timeoutMs * MAX_REQUESTS_PER_DECISION * 2 + 10_000;
+
 const sessionsOf = (deps: DiscoveryDeps): SessionService =>
-  createSessionService({ store: deps.store, settings: deps.config.session, mode: deps.config.mode, now: deps.now });
+  createSessionService({
+    store: deps.store,
+    settings: deps.config.session,
+    mode: deps.config.mode,
+    now: deps.now,
+    leaseTtlMs: deps.boundedAgent ? leaseTtlFor(deps.config) : undefined,
+  });
 
 function withUsage(state: SessionState, ledger: UsageLedger): SessionState {
   return {
@@ -207,6 +249,24 @@ function withOrder(state: SessionState, previousOrder: string[] | null): Session
   return { ...state, order: orderOf(rankCandidates(state.candidates, state.session, previousOrder)) };
 }
 
+type LiveExtras = {
+  mode: AgentMode;
+  fallbackReason: string | null;
+  update: RecommendationUpdate | null;
+  degraded: string | null;
+  trace: TurnTrace;
+};
+
+/** Live results must be Qloo-grounded and of the target type; anything else is a server defect. */
+function assertGrounded(deps: DiscoveryDeps, state: SessionState): void {
+  if (deps.config.mode !== "live") return;
+  for (const c of state.candidates) {
+    if (c.evidence.source !== "qloo" || c.entityId.startsWith("mock:") || c.entityType !== state.session.targetType) {
+      throw new AppError("INTERNAL_ERROR", 500, "Ungrounded recommendation in live session");
+    }
+  }
+}
+
 function toView(
   deps: DiscoveryDeps,
   state: SessionState,
@@ -214,7 +274,9 @@ function toView(
   decision: AgentDecision,
   sessionToken: string,
   revision: number,
+  live?: LiveExtras,
 ): DiscoveryView {
+  assertGrounded(deps, state);
   const { session } = state;
   const ranked = rankCandidates(state.candidates, session, previousOrder);
   const finished = session.status === "finished";
@@ -243,18 +305,106 @@ function toView(
     },
     recommendations: finished ? ranked.slice(0, deps.config.limits.finalRecommendationCount) : ranked,
     rankingChanged: previousOrder !== null && !sameOrder(previousOrder, orderOf(ranked)),
-    agent: { name: deps.agent.name, decision },
+    agent: live
+      ? { name: deps.boundedAgent?.name ?? deps.agent.name, decision, mode: live.mode, fallbackReason: live.fallbackReason }
+      : { name: deps.agent.name, decision },
     usage: {
       qlooCallCount: session.qlooCallCount,
       maxQlooCalls: deps.config.limits.maxQlooCallsPerSession,
       agentToolCallCount: session.agentToolCallCount,
+      ...(session.geminiRequestCount !== undefined ? { geminiRequestCount: session.geminiRequestCount } : {}),
     },
+    ...(live ? { recommendationUpdate: live.update, degraded: live.degraded ? { reason: live.degraded } : null, trace: live.trace } : {}),
   };
+}
+
+const TOP_K = 5;
+const topIds = (state: SessionState, previousOrder: string[] | null) =>
+  orderOf(rankCandidates(state.candidates, state.session, previousOrder)).slice(0, TOP_K);
+
+function liveDepsOf(deps: DiscoveryDeps, ledger: LiveLedger): LiveDeps {
+  return {
+    config: deps.config,
+    provider: countingProvider(deps.provider, ledger),
+    boundedAgent: deps.boundedAgent!,
+    now: deps.now ?? Date.now,
+  };
+}
+
+/** Structured per-request trace: counts, decisions, cost. Never tokens, prompts or secrets. */
+function logTurn(deps: DiscoveryDeps, kind: string, ledger: LiveLedger, fields: Record<string, unknown>): void {
+  const t = traceOf(ledger, deps.store.kind);
+  logEvent("info", "discovery.turn", {
+    kind,
+    sessionStore: t.sessionStore,
+    turnId: t.turnId,
+    qlooRequests: t.qlooRequests,
+    geminiRequests: t.geminiRequests,
+    geminiTokens: t.geminiTokens,
+    estimatedGeminiCostUsd: t.estimatedGeminiCostUsd,
+    latencyMs: t.latencyMs,
+    decisions: t.decisions,
+    degraded: ledger.degraded,
+    ...fields,
+  });
+}
+
+/** S7 live start: verified seed -> initial Qloo retrieval -> S5 -> S6 decision -> atomic create. */
+async function startLive(deps: DiscoveryDeps, input: StartRequest): Promise<DiscoveryView> {
+  const ledger = newLedger();
+  const live = liveDepsOf(deps, ledger);
+  const seed = await resolveSeed({ ...deps, provider: live.provider }, input);
+  const session = createSession({
+    anchorIds: [seed.entityId],
+    sourceType: input.sourceType,
+    targetType: input.targetType,
+    maxQuestions: Math.min(input.maxQuestions, deps.config.limits.maxQuestions),
+    mode: deps.config.mode,
+    now: nowOf(deps),
+    ttlSeconds: deps.config.session.ttlSeconds,
+  });
+  const initial: SessionState = { session, seed, candidates: [], order: [], finishReason: null };
+  // Initial retrieval is application-driven (not an agent tool call); no session exists yet to lock.
+  const retrieved = await retrieve(live, initial, ledger, { positiveTagIds: [], positiveEntityIds: [] });
+  if (!retrieved) throw new AppError("NO_RECOMMENDATIONS", 422, `No ${input.targetType} recommendations for this entity`);
+
+  const outcome = await decideAndExecute(live, retrieved, ledger, { allowRetrieval: false });
+  const final = applyLedger(withOrder(applyOutcome(outcome.state, outcome.question, outcome.decision), null), ledger);
+  const token = await sessionsOf(deps).create(final);
+  const update: RecommendationUpdate = {
+    mechanism: "INITIAL_RETRIEVAL",
+    qlooRequested: true,
+    internalCorrelationIds: [...ledger.correlationIds],
+    previousTopIds: [],
+    updatedTopIds: topIds(final, null),
+    preferenceIds: [],
+  };
+  logTurn(deps, "start", ledger, { revision: 0, action: outcome.decision.action, selectedQuestionId: outcome.decision.selectedQuestionId ?? null, mechanism: update.mechanism });
+  return toView(deps, final, null, outcome.decision, token, 0, liveExtras(deps, ledger, outcome, update));
+}
+
+function liveExtras(deps: DiscoveryDeps, ledger: LiveLedger, outcome: LiveOutcome, update: RecommendationUpdate): LiveExtras {
+  return {
+    mode: outcome.mode,
+    fallbackReason: outcome.fallbackReason,
+    update,
+    degraded: ledger.degraded,
+    trace: traceOf(ledger, deps.store.kind),
+  };
+}
+
+/** Preference IDs newly confirmed by an answer (positive ones may justify reretrieval). */
+function preferenceDelta(before: SessionState["session"], after: SessionState["session"]) {
+  const added = (a: string[], b: string[]) => b.filter((id) => !a.includes(id));
+  const positive = [...added(before.positiveTagIds, after.positiveTagIds), ...added(before.positiveEntityIds, after.positiveEntityIds)];
+  const negative = [...added(before.rejectedTagIds, after.rejectedTagIds), ...added(before.rejectedEntityIds, after.rejectedEntityIds)];
+  return { positive, all: [...positive, ...negative] };
 }
 
 const nowOf = (deps: DiscoveryDeps) => (deps.now ?? Date.now)();
 
 export async function startDiscovery(deps: DiscoveryDeps, input: StartRequest): Promise<DiscoveryView> {
+  if (deps.boundedAgent) return startLive(deps, input);
   const seed = await resolveSeed(deps, input);
   const session = createSession({
     anchorIds: [seed.entityId],
@@ -305,7 +455,9 @@ export async function answerDiscovery(deps: DiscoveryDeps, input: AnswerRequest)
 
   const answer = buildAnswer(question, input.response, nowOf(deps));
 
+  // Everything above is validation against authoritative state; no paid call has happened.
   const lease: Lease = await sessions.acquire(loaded);
+  if (deps.boundedAgent) return answerLive(deps, sessions, lease, state, answer);
   const ledger: UsageLedger = { qlooCalls: 0, toolCalls: 0 };
   let outcome: { next: SessionState; decision: AgentDecision };
   try {
@@ -321,6 +473,55 @@ export async function answerDiscovery(deps: DiscoveryDeps, input: AnswerRequest)
   }
   const token = await sessions.commit(lease, outcome.next);
   return toView(deps, outcome.next, state.order, outcome.decision, token, lease.revision + 1);
+}
+
+/**
+ * S7 live answer, holding the S4 lease: record the explicit preference, let the
+ * agent decide (retrieval offered only when the answer added a confirmed positive
+ * signal and budget remains), execute, then commit revision+1 atomically.
+ */
+async function answerLive(
+  deps: DiscoveryDeps,
+  sessions: SessionService,
+  lease: Lease,
+  state: SessionState,
+  answer: ReturnType<typeof buildAnswer>,
+): Promise<DiscoveryView> {
+  const ledger = newLedger();
+  const live = liveDepsOf(deps, ledger);
+  let outcome: LiveOutcome;
+  let next: SessionState;
+  const updated: SessionState = { ...state, session: { ...applyAnswer(state.session, answer), currentQuestionId: undefined } };
+  const delta = preferenceDelta(state.session, updated.session);
+  try {
+    outcome = await decideAndExecute(live, updated, ledger, { allowRetrieval: delta.positive.length > 0 });
+    next = applyLedger(withOrder(applyOutcome(outcome.state, outcome.question, outcome.decision), state.order), ledger);
+  } catch (error) {
+    // Nothing applied; usage already consumed stays charged.
+    await releaseQuietly(sessions, lease, applyLedger(state, ledger));
+    throw error;
+  }
+  const token = await sessions.commit(lease, next);
+
+  const previousTopIds = state.order.slice(0, TOP_K);
+  const updatedTopIds = topIds(next, state.order);
+  const update: RecommendationUpdate = {
+    mechanism: ledger.retrieved ? "QLOO_RERETRIEVAL" : sameOrder(state.order, next.order) ? "UNCHANGED" : "LOCAL_RERANK",
+    qlooRequested: ledger.retrieved,
+    internalCorrelationIds: [...ledger.correlationIds],
+    previousTopIds,
+    updatedTopIds,
+    preferenceIds: delta.all,
+  };
+  logTurn(deps, "answer", ledger, {
+    revision: lease.revision + 1,
+    action: outcome.decision.action,
+    selectedQuestionId: outcome.decision.selectedQuestionId ?? null,
+    response: answer.response,
+    preferenceChanges: delta.all.length,
+    mechanism: update.mechanism,
+  });
+  return toView(deps, next, state.order, outcome.decision, token, lease.revision + 1, liveExtras(deps, ledger, outcome, update));
 }
 
 /** Frees the lease after a failed turn; the original error is what the client sees. */

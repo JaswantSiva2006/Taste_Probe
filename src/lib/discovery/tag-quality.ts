@@ -17,10 +17,13 @@ export const MEANINGFUL_TAG_TYPES = new Set([
 const unusableLabels = /^(unknown|other|misc(?:ellaneous)?|n\/a|none|null|undefined|untitled)$/i;
 const opaqueLabel = /^(urn:|https?:|[0-9a-f]{8}-[0-9a-f-]{27,}$)/i;
 
+/** Live Qloo reports tag types as `urn:tag:genre:media` (S2 probe); fixtures use the bare form. */
+const tagTypeOf = (type: string) => type.trim().replace(/^urn:tag:/, "");
+
 export function isUsefulTag(tag: RecommendationCandidate["tags"][number]): boolean {
   const label = tag.name.trim();
   return (
-    MEANINGFUL_TAG_TYPES.has(tag.type) &&
+    MEANINGFUL_TAG_TYPES.has(tagTypeOf(tag.type)) &&
     label.length >= 2 &&
     label.length <= 60 &&
     !unusableLabels.test(label) &&

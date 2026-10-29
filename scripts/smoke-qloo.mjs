@@ -43,6 +43,8 @@ async function start() {
       QLOO_MODE: "live",
       SESSION_SIGNING_SECRET: process.env.SESSION_SIGNING_SECRET || randomBytes(32).toString("hex"),
       GOOGLE_API_KEY: "",
+      // Qloo-only smoke: explicitly disable inference (S7 live mode otherwise requires Gemini).
+      LLM_PROVIDER: "none",
       NEXT_TELEMETRY_DISABLED: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],

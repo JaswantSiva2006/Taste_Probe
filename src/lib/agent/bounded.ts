@@ -31,7 +31,8 @@ export type FallbackReason =
   | "hard_stop_tool_budget"
   | "hard_stop_no_actions"
   | "provider_error"
-  | "invalid_output";
+  | "invalid_output"
+  | "llm_disabled";
 
 export type AgentResult = {
   decision: AgentDecision;

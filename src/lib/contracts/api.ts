@@ -131,6 +131,42 @@ export const FinishReasonSchema = z.enum([
 ]);
 export type FinishReason = z.infer<typeof FinishReasonSchema>;
 
+export const UpdateMechanismSchema = z.enum(["INITIAL_RETRIEVAL", "QLOO_RERETRIEVAL", "LOCAL_RERANK", "UNCHANGED"]);
+export type UpdateMechanism = z.infer<typeof UpdateMechanismSchema>;
+
+export const RecommendationUpdateSchema = z.object({
+  mechanism: UpdateMechanismSchema,
+  /** True only when a Qloo Insights request actually ran in this request. */
+  qlooRequested: z.boolean(),
+  /** Internal application correlation IDs of those requests (not Qloo-issued IDs). */
+  internalCorrelationIds: z.array(z.string()),
+  previousTopIds: z.array(z.string()),
+  updatedTopIds: z.array(z.string()),
+  /** Confirmed preference IDs that drove the update. */
+  preferenceIds: z.array(z.string()),
+});
+export type RecommendationUpdate = z.infer<typeof RecommendationUpdateSchema>;
+
+export const TurnTraceSchema = z.object({
+  turnId: z.string(),
+  qlooRequests: z.number().int().nonnegative(),
+  geminiRequests: z.number().int().nonnegative(),
+  geminiTokens: z.object({ input: z.number(), output: z.number(), thinking: z.number() }),
+  estimatedGeminiCostUsd: z.number().nullable(),
+  latencyMs: z.number(),
+  sessionStore: z.enum(["memory", "redis"]),
+  decisions: z.array(
+    z.object({
+      mode: z.enum(["LIVE_GEMINI", "MOCK_AGENT", "DETERMINISTIC_FALLBACK"]),
+      action: z.enum(["retrieve", "enrich", "ask", "finish"]),
+      selectedQuestionId: z.string().nullable(),
+      validation: z.string(),
+      fallbackReason: z.string().nullable(),
+    }),
+  ),
+});
+export type TurnTrace = z.infer<typeof TurnTraceSchema>;
+
 export const DiscoveryViewSchema = z.object({
   sessionToken: z.string().min(1),
   sessionId: z.string().min(1),
@@ -152,11 +188,24 @@ export const DiscoveryViewSchema = z.object({
   /** Full ranked shortlist while asking; top FINAL_RECOMMENDATION_COUNT when finished. */
   recommendations: z.array(RankedRecommendationSchema),
   rankingChanged: z.boolean(),
-  agent: z.object({ name: z.string(), decision: AgentDecisionSchema }),
+  agent: z.object({
+    name: z.string(),
+    decision: AgentDecisionSchema,
+    /** S7 (live): who actually made the decision. Absent for the legacy mock path. */
+    mode: z.enum(["LIVE_GEMINI", "MOCK_AGENT", "DETERMINISTIC_FALLBACK"]).optional(),
+    fallbackReason: z.string().nullable().optional(),
+  }),
   usage: z.object({
     qlooCallCount: z.number().int().nonnegative(),
     maxQlooCalls: z.number().int().positive(),
     agentToolCallCount: z.number().int().nonnegative(),
+    geminiRequestCount: z.number().int().nonnegative().optional(),
   }),
+  /** S7 (live): how the shortlist changed in this request. */
+  recommendationUpdate: RecommendationUpdateSchema.nullable().optional(),
+  /** S7 (live): set when a provider failed and an existing verified shortlist was kept. */
+  degraded: z.object({ reason: z.string() }).nullable().optional(),
+  /** S7 (live): sanitized per-request accounting. */
+  trace: TurnTraceSchema.optional(),
 });
 export type DiscoveryView = z.infer<typeof DiscoveryViewSchema>;

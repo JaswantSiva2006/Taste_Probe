@@ -81,7 +81,7 @@ are git-ignored; never commit credentials.
 | `SESSION_STORE` | Optional `memory` or `redis`. Defaults to `memory` outside production. Production always uses `redis`, and `memory` is rejected there. |
 | `MAX_QUESTIONS` (≤ 3), `MAX_QLOO_CALLS_PER_SESSION`, `MAX_AGENT_TOOL_CALLS_PER_TURN`, `MAX_RECOMMENDATION_CANDIDATES`, `FINAL_RECOMMENDATION_COUNT` (≤ 5) | Budgets. |
 | `QLOO_API_KEY`, `QLOO_BASE_URL`, `QLOO_TIMEOUT_MS` | Live Qloo credentials, validated HTTPS endpoint, and timeout. Never required in mock mode. |
-| `LLM_PROVIDER` (`google` or `gemini`), `LLM_MODEL`, `GOOGLE_API_KEY`, `LLM_TEMPERATURE`, `LLM_TIMEOUT_MS` | Gemini agent (S6). Used only in live mode and by `smoke:gemini`. The key stays server-side. |
+| `LLM_PROVIDER`, `LLM_MODEL`, `GOOGLE_API_KEY`, `LLM_TEMPERATURE`, `LLM_TIMEOUT_MS` | Gemini agent, used in live mode. Canonical: `LLM_PROVIDER=google`, `LLM_MODEL=gemini-3.5-flash-lite`. `gemini` is accepted as a legacy alias. `none` explicitly disables inference (decisions are then labelled `DETERMINISTIC_FALLBACK`/`llm_disabled`). Missing Gemini config in live mode is a `CONFIG_ERROR`, never a silent fallback to the mock agent. The key stays server-side. |
 | `MAX_AGENT_TOOL_CALLS_PER_TURN`, `ENABLE_AGENT_TRACING` | Per-turn cap on model function calls (enforced in code), and structured `agent.decision` traces. |
 | `ENABLE_*`, `CACHE_TTL_SECONDS`, `SENTRY_DSN` | Parsed for later segments; not yet wired. |
 
@@ -105,6 +105,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `npm run build` | Production build. |
 | `npm run smoke:mock` | HTTP end-to-end smoke test (below). |
 | `npm run smoke:qloo` | Real Qloo-only HTTP smoke: Search, selection validation, Insights, and provenance (3 requests, 0 Gemini calls). |
+| `npm run smoke:live` | **Live HTTP E2E** through the real app: search → start → answer → finish with real Qloo and real Gemini (≤ 5 Qloo, ≤ 3 Gemini requests, < $0.05). It fails rather than raising a limit. |
 | `npm run smoke:gemini` | Live Gemini agent smoke: one real function-calling decision (≤ 2 requests, < $0.01, 0 Qloo/Redis calls). |
 | `npm run evaluate:questions` | Offline fixture-backed S5 evaluation with eligible/rejected counts, H/D/I/R/U scores, counterfactual top-five rankings, and runtime. |
 
@@ -159,11 +160,59 @@ If your env file keeps `QLOO_MODE=mock`, override it for a single run (PowerShel
 $env:QLOO_MODE='live'; npm run probe:live; Remove-Item Env:QLOO_MODE
 ```
 
+## Live discovery orchestration (S7)
+
+With `QLOO_MODE=live`, `createDiscoveryDeps` adds the S6 bounded agent, and the discovery service runs the
+live loop in `src/lib/discovery/live-turn.ts`. With `QLOO_MODE=mock`, nothing changes: fixtures, the
+deterministic mock agent, no network calls.
+
+**Start:** the client-selected ID is re-verified through Qloo Search. Qloo Insights retrieves the books;
+this is application-driven, and no session exists yet. Candidates are normalized; only `evidence.source = "qloo"`
+books of the target type are kept. Then:
+1. S5 scores the questions.
+2. The S6 context gets the top 3.
+3. Gemini makes one bounded decision.
+4. The session is created atomically.
+
+Zero Qloo results returns `NO_RECOMMENDATIONS`; a Qloo failure is reported as an error. Nothing is substituted.
+
+**Answer**, with the S4 order kept:
+1. Load and check the revision.
+2. Validate the active question and response.
+3. Take the lease. A stale or concurrent request gets 409 here, before any Qloo or Gemini call.
+4. Record the explicit preference (S5 logic; `unknown` infers nothing).
+5. Ask Gemini for a decision. `request_retrieval` is granted only if this answer added a confirmed **positive**
+   signal and Qloo budget remains. Negative preferences are local penalties, never hard Qloo exclusions.
+6. An authorized retrieval runs through the S3 provider, using only confirmed signals. The agent then gets
+   exactly **one** follow-up decision, with retrieval withdrawn: no recursive loops.
+7. Commit revision+1. On failure the lease is released and the usage consumed so far stays charged.
+
+**Actions:** `ask` uses only S5-approved IDs and wording. `retrieve` runs an authorized Qloo Insights request.
+`finish` returns the grounded shortlist (≤ 5). `enrich` is never granted, because the S3 provider has no enrichment
+capability; an `enrich` decision becomes a labelled fallback. When Qloo fails, the verified shortlist is kept and the
+response carries `degraded: { reason }`.
+
+**Truthful metadata** (new optional response fields; the frontend is unchanged):
+- `agent.mode`: `LIVE_GEMINI`, `MOCK_AGENT` or `DETERMINISTIC_FALLBACK`, with `fallbackReason`.
+- `recommendationUpdate.mechanism`: `INITIAL_RETRIEVAL`, `QLOO_RERETRIEVAL` (only if an Insights request ran),
+  `LOCAL_RERANK` or `UNCHANGED`. It also carries top-5 before/after, the responsible preference IDs and the
+  *internal* correlation IDs (application-generated, not Qloo IDs).
+- `trace`: Qloo and Gemini requests in this HTTP request, tokens, estimated cost, latency, every decision, and the
+  session-store kind.
+- `usage.geminiRequestCount`: cumulative per session.
+
+A `discovery.turn` log line records the same data, never prompts, tokens or secrets.
+
+**Budgets** are enforced in code: ≤ 3 questions, `MAX_QLOO_CALLS_PER_SESSION` (failures are charged at the 2-attempt
+cap), and `MAX_AGENT_TOOL_CALLS_PER_TURN`. The S4 lease is extended to cover a live turn's worst case.
+The in-memory store used in development gives no cross-instance guarantee. Production requires Redis
+(`npm run test:redis` is still a deployment gate).
+
 ## Gemini discovery agent (S6)
 
 `src/lib/agent/` provides a bounded agent: `decide(AgentDecisionContext) → AgentResult`.
 `createBoundedAgent(config)` selects the deterministic mock agent in mock mode and Gemini in live mode.
-It is **not yet wired into the discovery routes** (S7 owns that), so the mock pipeline is unchanged.
+In live mode it drives the discovery routes (S7, below). Mock mode keeps the original deterministic path.
 
 - **Context** (`context.ts`) is built only from verified data: the top 3 S5-eligible questions (IDs, approved
   wording, H/D/I/R/U scores), up to 8 sanitized and truncated candidate summaries, explicit preferences, and

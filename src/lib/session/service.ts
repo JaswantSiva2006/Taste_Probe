@@ -46,6 +46,8 @@ export function createSessionService(opts: {
   settings: SessionSettings;
   mode: ProviderMode;
   now?: () => number;
+  /** Lease lifetime; callers whose turn can outlast LEASE_TTL_MS pass a longer bound. */
+  leaseTtlMs?: number;
 }): SessionService {
   const { store, settings, mode } = opts;
   const now = opts.now ?? Date.now;
@@ -127,7 +129,7 @@ export function createSessionService(opts: {
       await swap(ownerOf(loaded), {
         revision: loaded.revision,
         lockId,
-        lockUntil: now() + LEASE_TTL_MS,
+        lockUntil: now() + Math.max(LEASE_TTL_MS, opts.leaseTtlMs ?? 0),
         data: serialize(loaded.state, loaded.revision),
       });
       return { sessionId: loaded.sessionId, revision: loaded.revision, lockId, expiresAt: loaded.expiresAt };

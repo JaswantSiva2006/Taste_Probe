@@ -143,6 +143,9 @@ export const TasteSessionSchema = z.object({
   status: z.enum(["active", "finished"]),
   mode: ProviderModeSchema,
   agentToolCallCount: z.number().int().nonnegative(),
+  // S7 live accounting (absent for mock sessions and sessions created before S7).
+  geminiRequestCount: z.number().int().nonnegative().optional(),
+  geminiCostUsd: z.number().nonnegative().optional(),
 });
 export type TasteSession = z.infer<typeof TasteSessionSchema>;
 

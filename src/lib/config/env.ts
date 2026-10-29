@@ -30,7 +30,8 @@ const EnvSchema = z.object({
   QLOO_BASE_URL: optionalString,
   QLOO_TIMEOUT_MS: int(8000, 100, 60_000),
 
-  LLM_PROVIDER: z.string().default("gemini"),
+  // `google` is canonical; `gemini` is a legacy alias; `none` explicitly disables inference in live mode.
+  LLM_PROVIDER: z.string().default("google"),
   LLM_MODEL: optionalString,
   GOOGLE_API_KEY: optionalString,
   LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),

@@ -327,9 +327,9 @@ async function runGemini() {
     say(`Gemini: SKIPPED — missing variable(s): ${missing.join(", ")}`);
     return;
   }
-  if (env.LLM_PROVIDER !== "gemini") {
+  if (env.LLM_PROVIDER !== "google" && env.LLM_PROVIDER !== "gemini") {
     summary.gemini.status = "skipped";
-    say(`Gemini: SKIPPED — LLM_PROVIDER is "${env.LLM_PROVIDER}", expected "gemini"`);
+    say(`Gemini: SKIPPED — LLM_PROVIDER is "${env.LLM_PROVIDER}", expected "google" (or legacy "gemini")`);
     return;
   }
   const model = env.LLM_MODEL;
