@@ -53,6 +53,8 @@ src/lib/telemetry/       structured logging
 tests/unit/              schemas, provider, normalization, questions, preferences, ranking, stop, agent, session, config
 tests/integration/       route handlers end to end (start / answer / finish + negative cases)
 scripts/smoke-mock.mjs   HTTP smoke test against a real Next.js server
+scripts/probe-live.mjs   S2 live Qloo/Gemini contract probe (helpers in scripts/lib/)
+docs/                    live-api-contract.md (verified provider contracts)
 ```
 
 ## Prerequisites
@@ -113,6 +115,29 @@ watch the ▲/▼ markers, then continue or press **Finish now**.
 - To smoke an already-running mock server instead: `SMOKE_BASE_URL=http://localhost:3000 npm run smoke:mock`.
   A `next dev` instance already running in this folder will block the spawned one, so stop it first or use
   `SMOKE_BASE_URL`.
+
+## Live API probe (S2)
+
+`npm run probe:live` makes **real, authenticated** calls to Qloo and Gemini to verify their contracts. The results
+are documented in [docs/live-api-contract.md](docs/live-api-contract.md). The probe is not part of `npm test` or
+`smoke:mock`, and the app itself still runs in mock mode only.
+
+- **Credentials:** read from `.env.local` / `.env` via Next's env loader. Values in the process environment win.
+  Needs `QLOO_MODE=live`, `QLOO_API_KEY`, `LLM_PROVIDER=gemini`, `LLM_MODEL`, `GOOGLE_API_KEY`. Optional:
+  `QLOO_BASE_URL` (default `https://hackathon.api.qloo.com`), `QLOO_TIMEOUT_MS`, `LLM_TIMEOUT_MS`, `LLM_TEMPERATURE`.
+  Missing variables are reported by name only. Key values are never printed; every output line is redacted.
+- **Hard limits:** at most **8 Qloo** requests (6 in practice) and **2 Gemini** requests per run. No retries, no
+  concurrency, no search grounding or image generation. The run stops on 401/403 (auth) and 402/429 (billing/quota).
+  A run costs about $0.0005 of Gemini usage with `gemini-3.5-flash-lite`.
+- **Output:** a sanitized summary on stdout and in `.probe/latest-summary.json` (git-ignored). Raw responses are never saved.
+- Requires Node's TypeScript type stripping (`--experimental-strip-types`, Node ≥ 22.6) so it can reuse the
+  canonical `AgentDecisionSchema` and the helpers in `scripts/lib/probe-helpers.ts`. The helpers are unit-tested offline.
+
+If your env file keeps `QLOO_MODE=mock`, override it for a single run (PowerShell):
+
+```powershell
+$env:QLOO_MODE='live'; npm run probe:live; Remove-Item Env:QLOO_MODE
+```
 
 ## HTTP API
 

@@ -11,6 +11,9 @@ next-env.d.ts
 # testing
 /coverage
 
+# live probe output (sanitized summaries only; never commit)
+/.probe/
+
 # environment files (never commit credentials; .env.example is intentionally tracked)
 .env
 .env.local

@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
-    "smoke:mock": "node scripts/smoke-mock.mjs"
+    "smoke:mock": "node scripts/smoke-mock.mjs",
+    "probe:live": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/probe-live.mjs"
   },
   "dependencies": {
     "next": "16.4.3",
