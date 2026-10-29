@@ -164,6 +164,23 @@ export const TurnTraceSchema = z.object({
       fallbackReason: z.string().nullable(),
     }),
   ),
+  questionGeneration: z.object({
+    mode: z.enum(["deterministic", "llm_grounded"]),
+    generated: z.number().int().nonnegative(),
+    accepted: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+    fallbackReason: z.string().nullable(),
+    selected: z.object({
+      questionId: z.string(),
+      evidenceIds: z.array(z.string()),
+      components: z.object({
+        entropy: z.number(), separation: z.number(), interpretability: z.number(),
+        redundancy: z.number(), ambiguity: z.number(), final: z.number(),
+      }),
+      positiveTop: z.array(z.string()),
+      negativeTop: z.array(z.string()),
+    }).optional(),
+  }).optional(),
 });
 export type TurnTrace = z.infer<typeof TurnTraceSchema>;
 

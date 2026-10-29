@@ -1,5 +1,7 @@
 import "server-only";
 import { createBoundedAgent } from "@/lib/agent/factory";
+import { createFetchGeminiTransport } from "@/lib/agent/gemini-transport";
+import { createGeminiQuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import { createDeterministicMockAgent } from "@/lib/agent/mock-agent";
 import type { AppConfig } from "@/lib/config/env";
 import { getQlooProvider } from "@/lib/qloo";
@@ -14,11 +16,25 @@ import type { DiscoveryDeps } from "./service";
  * The session store is memory outside production and Redis in production.
  */
 export function createDiscoveryDeps(config: AppConfig): DiscoveryDeps {
+  const questionGenerator =
+    config.mode === "live" &&
+    config.features.questionGenerationMode === "llm_grounded" &&
+    config.llm.provider !== "none" &&
+    config.llm.model &&
+    config.llm.apiKey
+      ? createGeminiQuestionGenerator({
+          model: config.llm.model,
+          temperature: config.llm.temperature,
+          timeoutMs: config.llm.timeoutMs,
+          transport: createFetchGeminiTransport(config.llm.apiKey),
+        })
+      : undefined;
   return {
     config,
     provider: getQlooProvider(config),
     agent: createDeterministicMockAgent(),
     store: getSessionStore(config),
     ...(config.mode === "live" ? { boundedAgent: createBoundedAgent(config) } : {}),
+    ...(questionGenerator ? { questionGenerator } : {}),
   };
 }

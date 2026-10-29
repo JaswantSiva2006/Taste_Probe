@@ -36,6 +36,7 @@ const EnvSchema = z.object({
   GOOGLE_API_KEY: optionalString,
   LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),
   LLM_TIMEOUT_MS: int(15_000, 100, 120_000),
+  QUESTION_GENERATION_MODE: z.enum(["deterministic", "llm_grounded"]).default("deterministic"),
 
   SESSION_SIGNING_SECRET: optionalString,
   SESSION_TTL_SECONDS: int(1800, 60, 86_400),
@@ -46,7 +47,7 @@ const EnvSchema = z.object({
   MAX_QUESTIONS: int(MAX_QUESTIONS_LIMIT, 1, MAX_QUESTIONS_LIMIT),
   MAX_QLOO_CALLS_PER_SESSION: int(6, 1, 50),
   MAX_AGENT_TOOL_CALLS_PER_TURN: int(3, 1, 10),
-  MAX_RECOMMENDATION_CANDIDATES: int(8, 2, 50),
+  MAX_RECOMMENDATION_CANDIDATES: int(30, 2, 50),
   FINAL_RECOMMENDATION_COUNT: int(5, 1, 5),
 
   ENABLE_ADAPTIVE_QUESTIONING: bool(true),
@@ -73,6 +74,7 @@ export type AppConfig = {
     finalRecommendationCount: number;
   };
   features: {
+    questionGenerationMode: "deterministic" | "llm_grounded";
     adaptiveQuestioning: boolean;
     earlyStopping: boolean;
     qlooCache: boolean;
@@ -184,6 +186,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       finalRecommendationCount: e.FINAL_RECOMMENDATION_COUNT,
     },
     features: {
+      questionGenerationMode: e.QUESTION_GENERATION_MODE,
       adaptiveQuestioning: e.ENABLE_ADAPTIVE_QUESTIONING,
       earlyStopping: e.ENABLE_EARLY_STOPPING,
       qlooCache: e.ENABLE_QLOO_CACHE,

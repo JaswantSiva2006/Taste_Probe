@@ -11,6 +11,7 @@ import type {
   TurnTrace,
 } from "@/lib/contracts";
 import type { AgentMode, BoundedAgent } from "@/lib/agent/bounded";
+import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import { MAX_REQUESTS_PER_DECISION } from "@/lib/agent/gemini-agent";
 import type { DiscoveryAgent } from "@/lib/agent/types";
 import { validateAgentDecision } from "@/lib/agent/validate";
@@ -56,6 +57,7 @@ export type DiscoveryDeps = {
    * the S7 live loop. Absent in mock mode, which keeps the original S1–S5 path.
    */
   boundedAgent?: BoundedAgent;
+  questionGenerator?: QuestionGenerator;
   selectQuestions?: QuestionSelector;
   now?: () => number;
 };
@@ -72,7 +74,7 @@ type UsageLedger = { qlooCalls: number; toolCalls: number };
  * outlive their worst case: 2 Qloo attempts plus 2 decisions x 2 Gemini requests, plus slack.
  */
 const leaseTtlFor = (config: AppConfig) =>
-  config.qloo.timeoutMs * 2 + config.llm.timeoutMs * MAX_REQUESTS_PER_DECISION * 2 + 10_000;
+  config.qloo.timeoutMs * 2 + config.llm.timeoutMs * (MAX_REQUESTS_PER_DECISION * 2 + 1) + 10_000;
 
 const sessionsOf = (deps: DiscoveryDeps): SessionService =>
   createSessionService({
@@ -327,6 +329,7 @@ function liveDepsOf(deps: DiscoveryDeps, ledger: LiveLedger): LiveDeps {
     config: deps.config,
     provider: countingProvider(deps.provider, ledger),
     boundedAgent: deps.boundedAgent!,
+    questionGenerator: deps.questionGenerator,
     now: deps.now ?? Date.now,
   };
 }
@@ -344,6 +347,7 @@ function logTurn(deps: DiscoveryDeps, kind: string, ledger: LiveLedger, fields: 
     estimatedGeminiCostUsd: t.estimatedGeminiCostUsd,
     latencyMs: t.latencyMs,
     decisions: t.decisions,
+    questionGeneration: t.questionGeneration,
     degraded: ledger.degraded,
     ...fields,
   });

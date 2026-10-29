@@ -5,9 +5,11 @@ import type { BoundedAgent } from "@/lib/agent/bounded";
 import { createBoundedAgent } from "@/lib/agent/factory";
 import { GeminiTransportError, type GeminiTransport } from "@/lib/agent/gemini-transport";
 import { createDeterministicMockAgent } from "@/lib/agent/mock-agent";
+import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import { createDiscoveryDeps } from "@/lib/discovery/deps";
 import { answerDiscovery, finishDiscovery, startDiscovery, type DiscoveryDeps } from "@/lib/discovery/service";
 import { isUsefulTag } from "@/lib/discovery/tag-quality";
+import { buildQuestionCandidates } from "@/lib/discovery/questions";
 import type { QlooProvider, RecommendationRequest } from "@/lib/qloo/provider";
 import type { RawInsightEntity } from "@/lib/qloo/raw-types";
 import { createMemorySessionStore } from "@/lib/session/memory-store";
@@ -230,6 +232,46 @@ describe("1/27/28. agent selection and mode isolation", () => {
 });
 
 describe("start: real retrieval, S5 shortlist, Gemini decision", () => {
+  it("S8.5 generates one grounded question pool before the separate S6 decision", async () => {
+    const env = liveEnv({ gemini: [askTop], env: { QUESTION_GENERATION_MODE: "llm_grounded", MAX_RECOMMENDATION_CANDIDATES: "30" } });
+    let calls = 0;
+    env.deps.questionGenerator = {
+      async generate(input) {
+        calls += 1;
+        const questions = buildQuestionCandidates(input.ranked.map((item) => item.candidate), input.session.targetType).slice(0, 2);
+        return {
+          questions,
+          validation: { questions, generated: 3, accepted: 2, rejected: 1, rejectionCounts: { unknown_tag: 1 } },
+          fallbackReason: null,
+          usage: { promptTokens: 200, outputTokens: 50, thoughtTokens: 0, totalTokens: 250, requests: 1, latencyMs: 5, estimatedCostUsd: 0.000185 },
+        };
+      },
+    } satisfies QuestionGenerator;
+    const view = await startDiscovery(env.deps, START);
+    expect(calls).toBe(1);
+    expect(view.currentQuestion?.questionId).toBeTruthy();
+    expect(view.trace).toMatchObject({ geminiRequests: 2, geminiTokens: { input: 1200, output: 90, thinking: 0 } });
+    expect(view.usage.geminiRequestCount).toBe(2);
+  });
+
+  it("S8.5 falls back to deterministic S5 questions when generation yields none", async () => {
+    const env = liveEnv({ gemini: [askTop], env: { QUESTION_GENERATION_MODE: "llm_grounded" } });
+    env.deps.questionGenerator = {
+      async generate() {
+        return {
+          questions: [],
+          validation: { questions: [], generated: 2, accepted: 0, rejected: 2, rejectionCounts: { unsupported_semantics: 2 } },
+          fallbackReason: "no_valid_proposals",
+          usage: { promptTokens: 100, outputTokens: 20, thoughtTokens: 0, totalTokens: 120, requests: 1, latencyMs: 4, estimatedCostUsd: 0.00008 },
+        };
+      },
+    } satisfies QuestionGenerator;
+    const view = await startDiscovery(env.deps, START);
+    expect(view.status).toBe("asking");
+    expect(view.currentQuestion?.questionId).toMatch(/^(tag|entity):/);
+    expect(view.trace?.geminiRequests).toBe(2);
+  });
+
   it("2/3/25/27. Gemini asks an approved S5 question over grounded Qloo books", async () => {
     const env = liveEnv({ gemini: [askAt(1)] });
     const v = await startDiscovery(env.deps, START);
@@ -452,6 +494,28 @@ describe("budgets", () => {
 });
 
 describe("S4 security with live work", () => {
+  it("S8.5 rejects a stale token before another question-generation call", async () => {
+    const env = liveEnv({ gemini: [askTop, askTop], env: { QUESTION_GENERATION_MODE: "llm_grounded" } });
+    let generations = 0;
+    env.deps.questionGenerator = {
+      async generate(input) {
+        generations += 1;
+        const questions = buildQuestionCandidates(input.ranked.map((item) => item.candidate), input.session.targetType);
+        return {
+          questions,
+          validation: { questions, generated: questions.length, accepted: questions.length, rejected: 0, rejectionCounts: {} },
+          fallbackReason: null,
+          usage: { promptTokens: 1, outputTokens: 1, thoughtTokens: 0, totalTokens: 2, requests: 1, latencyMs: 1, estimatedCostUsd: 0.0000028 },
+        };
+      },
+    } satisfies QuestionGenerator;
+    const v0 = await startDiscovery(env.deps, START);
+    await answer(env.deps, v0, "unknown");
+    expect(generations).toBe(2);
+    await expect(answer(env.deps, v0, "unknown")).rejects.toMatchObject({ code: "SESSION_REVISION_CONFLICT" });
+    expect(generations).toBe(2);
+  });
+
   it("20. a stale token is rejected before any Qloo or Gemini call", async () => {
     const env = liveEnv({ gemini: [askTop, askTop] });
     const v0 = await startDiscovery(env.deps, START);

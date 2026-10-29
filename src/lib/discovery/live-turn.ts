@@ -4,6 +4,7 @@ import type { AgentDecision, Question, TurnTrace } from "@/lib/contracts";
 import { deterministicDecision, type AgentMode, type AgentResult, type BoundedAgent } from "@/lib/agent/bounded";
 import { buildAgentContext, offeredQuestions, type AgentDecisionContext } from "@/lib/agent/context";
 import type { AppConfig } from "@/lib/config/env";
+import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import type { QlooProvider } from "@/lib/qloo/provider";
 import type { SessionState } from "@/lib/session/state";
 import { AppError } from "@/lib/validation/errors";
@@ -43,6 +44,14 @@ export type LiveLedger = {
   correlationIds: string[];
   retrieved: boolean;
   degraded: string | null;
+  questionPool?: Question[];
+  questionGeneration?: {
+    generated: number;
+    accepted: number;
+    rejected: number;
+    fallbackReason: string | null;
+    selected?: { questionId: string; evidenceIds: string[]; components: ReturnType<typeof optimizeQuestions>["eligible"][number]["components"]; positiveTop: string[]; negativeTop: string[] };
+  };
 };
 
 export function newLedger(): LiveLedger {
@@ -100,6 +109,7 @@ export type LiveDeps = {
   config: AppConfig;
   provider: QlooProvider;
   boundedAgent: BoundedAgent;
+  questionGenerator?: QuestionGenerator;
   now: () => number;
 };
 
@@ -149,18 +159,52 @@ export async function retrieve(
 }
 
 /** S5: eligible, unasked, scored questions for the current authoritative state. */
-function eligibleTraces(deps: LiveDeps, state: SessionState) {
+async function eligibleTraces(deps: LiveDeps, state: SessionState, ledger: LiveLedger) {
   if (!deps.config.features.adaptiveQuestioning) return [];
   const ranked = rankCandidates(state.candidates, state.session);
-  const questions = availableQuestions(buildQuestionCandidates(state.candidates, state.session.targetType), state.session);
-  return optimizeQuestions(questions, ranked, { askedQuestionIds: state.session.askedQuestionIds, preferences: state.session }).eligible;
+  let generated = ledger.questionPool;
+  if (deps.config.features.questionGenerationMode === "llm_grounded" && !deps.questionGenerator && generated === undefined) {
+    generated = buildQuestionCandidates(state.candidates, state.session.targetType);
+    ledger.questionPool = generated;
+    ledger.questionGeneration = { generated: 0, accepted: 0, rejected: 0, fallbackReason: "generator_unavailable" };
+  }
+  if (deps.config.features.questionGenerationMode === "llm_grounded" && deps.questionGenerator && generated === undefined) {
+    const result = await deps.questionGenerator.generate({ seed: state.seed, session: state.session, ranked });
+    ledger.geminiRequests += result.usage.requests;
+    ledger.tokens.input += result.usage.promptTokens;
+    ledger.tokens.output += result.usage.outputTokens;
+    ledger.tokens.thinking += result.usage.thoughtTokens;
+    if (result.usage.estimatedCostUsd === null) ledger.geminiCostKnown = false;
+    else ledger.geminiCostUsd += result.usage.estimatedCostUsd;
+    ledger.questionGeneration = {
+      generated: result.validation.generated,
+      accepted: result.validation.accepted,
+      rejected: result.validation.rejected,
+      fallbackReason: result.fallbackReason,
+    };
+    generated = result.questions.length ? result.questions : buildQuestionCandidates(state.candidates, state.session.targetType);
+    ledger.questionPool = generated;
+  }
+  const source = generated ?? buildQuestionCandidates(state.candidates, state.session.targetType);
+  const questions = availableQuestions(source, state.session);
+  const eligible = optimizeQuestions(questions, ranked, { askedQuestionIds: state.session.askedQuestionIds, preferences: state.session }).eligible;
+  if (ledger.questionGeneration && eligible[0]) {
+    ledger.questionGeneration.selected = {
+      questionId: eligible[0].question.questionId,
+      evidenceIds: [...eligible[0].evidenceIds],
+      components: { ...eligible[0].components },
+      positiveTop: eligible[0].positiveOrder.slice(0, 5),
+      negativeTop: eligible[0].negativeOrder.slice(0, 5),
+    };
+  }
+  return eligible;
 }
 
-function contextFor(deps: LiveDeps, state: SessionState, ledger: LiveLedger, allowRetrieval: boolean): AgentDecisionContext {
+async function contextFor(deps: LiveDeps, state: SessionState, ledger: LiveLedger, allowRetrieval: boolean): Promise<AgentDecisionContext> {
   return buildAgentContext({
     session: state.session,
     ranked: rankCandidates(state.candidates, state.session),
-    eligible: eligibleTraces(deps, state),
+    eligible: await eligibleTraces(deps, state, ledger),
     toolCallsRemaining: deps.config.limits.maxAgentToolCallsPerTurn - ledger.toolCalls,
     qlooCallsRemaining: qlooRemaining(deps, state, ledger),
     now: deps.now(),
@@ -168,6 +212,7 @@ function contextFor(deps: LiveDeps, state: SessionState, ledger: LiveLedger, all
     // The S3 provider has no enrichment capability, so the tool is never granted.
     allowEnrichment: false,
     allowEarlyFinish: deps.config.features.earlyStopping,
+    ...(deps.config.features.questionGenerationMode === "llm_grounded" ? { shortlistSize: 1 } : {}),
   });
 }
 
@@ -223,7 +268,7 @@ export async function decideAndExecute(
   let current = state;
   let allowRetrieval = opts.allowRetrieval;
   for (let step = 0; step < MAX_DECISIONS_PER_TURN; step += 1) {
-    const context = contextFor(deps, current, ledger, allowRetrieval);
+    const context = await contextFor(deps, current, ledger, allowRetrieval);
     const result = await deps.boundedAgent.decide(context);
     record(ledger, result);
     const { decision } = result;
@@ -254,11 +299,11 @@ export async function decideAndExecute(
     } catch (error) {
       // Keep the existing verified shortlist; never fabricate replacements.
       ledger.degraded = error instanceof AppError ? `qloo_${error.code.toLowerCase()}` : "qloo_error";
-      return fallback(contextFor(deps, current, ledger, false), current, ledger, "retrieval_failed");
+      return fallback(await contextFor(deps, current, ledger, false), current, ledger, "retrieval_failed");
     }
     allowRetrieval = false;
   }
-  return fallback(contextFor(deps, current, ledger, false), current, ledger, "decision_limit");
+  return fallback(await contextFor(deps, current, ledger, false), current, ledger, "decision_limit");
 }
 
 export function traceOf(ledger: LiveLedger, sessionStore: "memory" | "redis"): TurnTrace {
@@ -271,5 +316,8 @@ export function traceOf(ledger: LiveLedger, sessionStore: "memory" | "redis"): T
     latencyMs: Math.round(performance.now() - ledger.startedAt),
     sessionStore,
     decisions: ledger.decisions,
+    ...(ledger.questionGeneration
+      ? { questionGeneration: { mode: "llm_grounded" as const, ...ledger.questionGeneration } }
+      : {}),
   };
 }

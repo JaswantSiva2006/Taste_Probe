@@ -121,6 +121,13 @@ describe("configuration", () => {
     expect(config.qloo.apiKey).toBeUndefined();
     expect(config.limits.maxQuestions).toBe(3);
     expect(config.limits.finalRecommendationCount).toBe(5);
+    expect(config.limits.maxRecommendationCandidates).toBe(30);
+    expect(config.features.questionGenerationMode).toBe("deterministic");
+  });
+
+  it("validates the opt-in LLM-grounded question-generation mode", () => {
+    expect(loadConfig({ NODE_ENV: "test", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: newTestSecret(), QUESTION_GENERATION_MODE: "llm_grounded" }).features.questionGenerationMode).toBe("llm_grounded");
+    expect(() => loadConfig({ NODE_ENV: "test", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: newTestSecret(), QUESTION_GENERATION_MODE: "freeform" })).toThrowError(/QUESTION_GENERATION_MODE/);
   });
 
   it("defaults to mock mode", () => {

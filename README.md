@@ -82,6 +82,7 @@ are git-ignored; never commit credentials.
 | `MAX_QUESTIONS` (≤ 3), `MAX_QLOO_CALLS_PER_SESSION`, `MAX_AGENT_TOOL_CALLS_PER_TURN`, `MAX_RECOMMENDATION_CANDIDATES`, `FINAL_RECOMMENDATION_COUNT` (≤ 5) | Budgets. |
 | `QLOO_API_KEY`, `QLOO_BASE_URL`, `QLOO_TIMEOUT_MS` | Live Qloo credentials, validated HTTPS endpoint, and timeout. Never required in mock mode. |
 | `LLM_PROVIDER`, `LLM_MODEL`, `GOOGLE_API_KEY`, `LLM_TEMPERATURE`, `LLM_TIMEOUT_MS` | Gemini agent, used in live mode. Canonical: `LLM_PROVIDER=google`, `LLM_MODEL=gemini-3.5-flash-lite`. `gemini` is accepted as a legacy alias. `none` explicitly disables inference (decisions are then labelled `DETERMINISTIC_FALLBACK`/`llm_disabled`). Missing Gemini config in live mode is a `CONFIG_ERROR`, never a silent fallback to the mock agent. The key stays server-side. |
+| `QUESTION_GENERATION_MODE` | `deterministic` (default) preserves S5 generation; `llm_grounded` enables one bounded Gemini proposal call per leased turn followed by deterministic evidence validation and S5 scoring. |
 | `MAX_AGENT_TOOL_CALLS_PER_TURN`, `ENABLE_AGENT_TRACING` | Per-turn cap on model function calls (enforced in code), and structured `agent.decision` traces. |
 | `ENABLE_*`, `CACHE_TTL_SECONDS`, `SENTRY_DSN` | Parsed for later segments; not yet wired. |
 
@@ -109,6 +110,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `npm run smoke:live` | **Live HTTP E2E** through the real app: search → start → answer → finish with real Qloo and real Gemini (≤ 5 Qloo, ≤ 3 Gemini requests, < $0.05). It fails rather than raising a limit. |
 | `npm run smoke:gemini` | Live Gemini agent smoke: one real function-calling decision (≤ 2 requests, < $0.01, 0 Qloo/Redis calls). |
 | `npm run evaluate:questions` | Offline fixture-backed S5 evaluation with eligible/rejected counts, H/D/I/R/U scores, counterfactual top-five rankings, and runtime. |
+| `npm run evaluate:question-quality` | Offline 20-scenario comparison of deterministic S5 and controlled grounded proposal fixtures; prints safety/proxy metrics and blind human-rating material. |
+| `npm run smoke:questions-live` | Bounded route-level live S8.5 smoke using real Qloo and Gemini; reports validation, S5 scores, counterfactuals, tokens, cost, and latency. |
 
 Open http://localhost:3000, search **Interstellar**, select it, start discovery, answer a question and
 watch the ▲/▼ markers, then continue or press **Finish now**.
@@ -175,6 +178,26 @@ $env:QLOO_MODE='live'; npm run probe:live; Remove-Item Env:QLOO_MODE
 
 ## Live discovery orchestration (S7)
 
+### LLM-grounded question proposals (S8.5)
+
+The opt-in `llm_grounded` path runs before the existing S6 decision agent. It sends a compact bundle of at most
+30 normalized candidates to a separate schema-constrained Gemini call, validates every cited entity/tag and
+association, rejects unsuitable metadata and unsupported answer mappings, canonicalizes wording from verified
+labels/titles, and passes only valid server-constructed questions to S5. S5 still selects by H/D/I/R/U; Gemini
+cannot override grounding or optimizer order. The S6 agent receives only the highest-scoring approved question.
+
+The proposal call is cached once per replay-safe leased turn. Timeout, quota, malformed JSON, empty output, or
+complete validation rejection uses the original deterministic S5 pool and records the fallback in the turn trace.
+The default remains `deterministic`. The offline 20-scenario fixture comparison is a safety/proxy evaluation, not
+evidence of human-quality improvement; blind rating material is emitted, but no human ratings have been collected.
+
+Measured S8.5 evaluation (2026-10-29): the controlled 20-scenario fixtures generated 32 proposals, accepted 16,
+rejected 16 (including 12 unsupported and 4 duplicates), covered tag and entity questions, and produced the same
+mean top S5 score as the deterministic baseline (`0.667945`). This is no objective-score improvement. The bounded
+route-level live smoke requested up to 30 Qloo candidates, generated and accepted 10/10 grounded proposals, selected
+“Do you enjoy Dystopia books?” with `J=0.853076`, used 3 Qloo and 2 Gemini requests, cost an estimated `$0.0096544`,
+and took 8,833 ms in the start route. Human quality evaluation remains not performed.
+
 With `QLOO_MODE=live`, `createDiscoveryDeps` adds the S6 bounded agent, and the discovery service runs the
 live loop in `src/lib/discovery/live-turn.ts`. With `QLOO_MODE=mock`, nothing changes: fixtures, the
 deterministic mock agent, no network calls.
@@ -183,7 +206,7 @@ deterministic mock agent, no network calls.
 this is application-driven, and no session exists yet. Candidates are normalized; only `evidence.source = "qloo"`
 books of the target type are kept. Then:
 1. S5 scores the questions.
-2. The S6 context gets the top 3.
+2. The S6 context gets the top 3 in deterministic mode, or only the top validated proposal in `llm_grounded` mode.
 3. Gemini makes one bounded decision.
 4. The session is created atomically.
 
