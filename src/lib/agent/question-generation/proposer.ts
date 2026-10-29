@@ -93,7 +93,7 @@ export function buildQuestionGenerationRequest(bundle: QuestionEvidenceBundle, t
           "Entity supportedAnswerTypes must be exactly prefer_a, prefer_b, both, neither, unknown.",
           "Every target tag must be cited on an entity that actually carries it; both target entities must appear in evidence.",
           "Prefer questions that reveal why the seed appeals; avoid merely confirming a broad genre when a supported, more specific dimension exists.",
-          "Use short natural wording. Safe tag forms include: Would you enjoy <exact tag>?, Are you drawn to <exact tag> stories?, or Would you prefer books with <exact tag>?.",
+          "Use the exact verified tag label without reinterpreting it. Put it into one concise positive intent such as: Do you like stories that explore <exact tag>?, Do you enjoy <exact tag> storytelling?, or Would you like to read more <exact tag>?.",
           "Allocate up to 8 proposals across supported themes, atmosphere/style, narrative focus, and grounded title comparisons; do not force a category without evidence.",
           "Avoid adult/age, format, technical metadata, vague labels, unsupported themes, and paraphrased semantic claims.",
           "Return at most 8 distinct proposals; fewer is acceptable.",

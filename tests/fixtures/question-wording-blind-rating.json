@@ -1,0 +1,28 @@
+{
+  "datasetVersion": "s8.7-wording-v1",
+  "provenance": "Synthetic held-out wording cases; not observed Qloo data",
+  "methodLabelsHidden": true,
+  "humanEvaluation": "NOT_PERFORMED",
+  "rubric": {
+    "scale": "1-5",
+    "dimensions": ["naturalness", "clarity", "answerability", "semantic fidelity"],
+    "instruction": "Rate A and B independently. Penalize any wording that changes the exact preference named in the context."
+  },
+  "samples": [
+    { "dimension": "grief", "A": "Do you like stories that explore the theme of grief?", "B": "Would you enjoy grief?" },
+    { "dimension": "memory", "A": "Would you enjoy memory?", "B": "Do you like stories that explore the theme of memory?" },
+    { "dimension": "class conflict", "A": "Do you like stories that explore the theme of class conflict?", "B": "Would you enjoy class conflict?" },
+    { "dimension": "environmentalism", "A": "Would you enjoy environmentalism?", "B": "Do you like stories that explore the theme of environmentalism?" },
+    { "dimension": "coming of age", "A": "Do you like stories that explore the theme of coming of age?", "B": "Would you enjoy coming of age?" },
+    { "dimension": "rural isolation", "A": "Would you enjoy rural isolation?", "B": "Do you enjoy stories set in rural isolation?" },
+    { "dimension": "Victorian era", "A": "Do you enjoy stories set in the Victorian era?", "B": "Would you enjoy Victorian era?" },
+    { "dimension": "near future", "A": "Would you enjoy near future?", "B": "Do you enjoy stories set in near future?" },
+    { "dimension": "journey motif", "A": "Do you like stories built around journey motif?", "B": "Would you enjoy journey motif?" },
+    { "dimension": "forbidden knowledge", "A": "Would you enjoy forbidden knowledge?", "B": "Do you like stories built around forbidden knowledge?" },
+    { "dimension": "double identity", "A": "Do you like stories built around double identity?", "B": "Would you enjoy double identity?" },
+    { "dimension": "epistolary", "A": "Would you enjoy epistolary?", "B": "Do you enjoy epistolary storytelling?" },
+    { "dimension": "absurdist", "A": "Do you enjoy absurdist storytelling?", "B": "Would you enjoy absurdist?" },
+    { "dimension": "solarpunk", "A": "Would you enjoy solarpunk?", "B": "Would you like to read more solarpunk?" },
+    { "dimension": "Afrofuturism", "A": "Would you like to read more Afrofuturism?", "B": "Would you enjoy Afrofuturism?" }
+  ]
+}

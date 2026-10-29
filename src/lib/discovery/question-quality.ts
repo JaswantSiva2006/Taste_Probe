@@ -26,9 +26,13 @@ export function semanticQuestionScores(question: Question, candidates: Recommend
     ? candidates.filter((candidate) => candidate.tags.some((item) => item.id === tag.id)).length
     : 0;
   const ratio = candidates.length ? carriers / candidates.length : 0;
+  const label = tag?.name.trim() ?? "";
+  const bareLabel = label.length > 0 && [
+    `would you enjoy ${label}?`, `would you like ${label}?`, `do you enjoy ${label}?`,
+  ].some((value) => value.toLowerCase() === text.toLowerCase());
 
   const clarity = clamp5(5 - (words > 22 ? 1 : 0) - (!text.endsWith("?") ? 1 : 0));
-  const naturalness = clamp5(5 - (mechanical.test(text) ? 1.5 : 0) - (/\b(?:tag|metadata|entity)\b/i.test(text) ? 2 : 0));
+  const naturalness = clamp5(5 - (mechanical.test(text) || bareLabel ? 1.5 : 0) - (/\b(?:tag|metadata|entity)\b/i.test(text) ? 2 : 0));
   const answerability = clamp5(5 - (question.targetType === "entity" && question.targetIds.length !== 2 ? 3 : 0));
   const vagueTarget = vague.test(tag?.name.trim() ?? "");
   const relevance = clamp5(question.targetType === "entity" ? 4 : vagueTarget ? 1.5 : 4);

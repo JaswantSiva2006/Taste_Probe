@@ -26,6 +26,7 @@
     "evaluate:questions": "vitest run tests/evaluation/question-evaluation.test.ts --reporter=verbose",
     "evaluate:question-quality": "vitest run tests/evaluation/question-quality.test.ts --reporter=verbose",
     "optimize:question-quality": "vitest run tests/evaluation/question-optimization.test.ts --reporter=verbose",
+    "evaluate:question-wording": "vitest run tests/evaluation/question-wording.test.ts --reporter=verbose",
     "probe:live": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/probe-live.mjs"
   },
   "dependencies": {

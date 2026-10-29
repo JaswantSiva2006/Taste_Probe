@@ -1,6 +1,7 @@
 import type { Question, RecommendationCandidate, TasteSession } from "@/lib/contracts";
 import { isUsefulTag } from "@/lib/discovery/tag-quality";
 import { ProposedQuestionBatchSchema, type ProposedQuestion } from "./schema";
+import { renderEntityQuestion, renderTagQuestion } from "./renderer";
 
 export type ProposalRejection =
   | "invalid_schema" | "unknown_entity" | "unknown_tag" | "incorrect_association"
@@ -22,20 +23,6 @@ const sameSet = (a: string[], b: string[]) => {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 };
 const normalized = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
-const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-function safeTagText(proposal: ProposedQuestion, tagName: string, noun: string): string {
-  const tag = escaped(tagName.trim());
-  const patterns = [
-    new RegExp(`^would you (?:enjoy|like) (?:more )?${tag}(?: ${noun})?\\?$`, "i"),
-    new RegExp(`^are you drawn to ${tag} (?:stories|${noun})\\?$`, "i"),
-    new RegExp(`^would you prefer ${noun} with ${tag}\\?$`, "i"),
-    new RegExp(`^do you like (?:${noun}|stories) (?:with|featuring) ${tag}\\?$`, "i"),
-    new RegExp(`^do you enjoy ${tag} ${noun}\\?$`, "i"),
-  ];
-  const text = proposal.questionText.trim().replace(/\s+/g, " ");
-  return patterns.some((pattern) => pattern.test(text)) ? text : `Do you enjoy ${tagName.trim()} ${noun}?`;
-}
 
 function reject(report: ValidationReport, reason: ProposalRejection): void {
   report.rejected += 1;
@@ -58,10 +45,10 @@ function canonicalTagQuestion(proposal: ProposedQuestion, candidates: Recommenda
     }
   }
   if (!proposal.evidence.some((evidence) => evidence.tagIds.includes(tagId))) return "incorrect_association";
-  const noun = carriers[0]!.entityType === "book" ? "books" : "movies";
+  const noun = carriers[0]!.entityType === "book" ? "books" as const : "movies" as const;
   return {
     questionId: "tag:" + tagId,
-    text: safeTagText(proposal, tag.name, noun),
+    text: renderTagQuestion({ proposal, tag, noun, strategy: "hybrid" }),
     targetType: "tag",
     targetIds: [tagId],
     allowedResponses: ["like", "dislike", "unknown"],
@@ -88,7 +75,7 @@ function canonicalEntityQuestion(proposal: ProposedQuestion, candidates: Recomme
   const noun = a.entityType === "book" ? "book" : "movie";
   return {
     questionId: "entity:" + aId + "|" + bId,
-    text: "Which " + noun + " sounds more appealing: “" + a.name + "” or “" + b.name + "”?",
+    text: renderEntityQuestion({ proposal, aName: a.name, bName: b.name, noun }),
     targetType: "entity",
     targetIds: [aId, bId],
     allowedResponses: ["prefer_a", "prefer_b", "both", "neither", "unknown"],

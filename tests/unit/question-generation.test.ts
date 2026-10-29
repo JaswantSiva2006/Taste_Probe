@@ -91,7 +91,42 @@ describe("deterministic proposal grounding", () => {
       proposals: [{ ...validTag, questionText: "Would you like emotionally profound cosmic journeys?" }],
     }, candidates, session());
     expect(report).toMatchObject({ accepted: 1, rejected: 0 });
-    expect(report.questions[0]?.text).toBe("Do you enjoy Space opera books?");
+    expect(report.questions[0]?.text).toBe("Do you like stories that explore the theme of Space opera?");
+  });
+
+  it("never reinterprets science fiction as scientific rigor", () => {
+    const scienceFiction = { id: "tag:sf", name: "Science fiction", type: "genre:media" };
+    const books = [candidate(1, [scienceFiction]), candidate(2, [])];
+    const proposal = {
+      ...validTag,
+      preferenceDimension: "Science fiction",
+      targetIds: ["tag:sf"],
+      evidence: [{ entityId: "qloo:book:1", tagIds: ["tag:sf"] }],
+      questionText: "Would you enjoy scientifically rigorous storytelling?",
+    };
+    const report = validateProposedQuestions({ proposals: [proposal] }, books, session());
+    expect(report).toMatchObject({ accepted: 1, rejected: 0 });
+    expect(report.questions[0]).toMatchObject({
+      text: "Would you like to read more Science fiction?",
+      targetIds: ["tag:sf"],
+      allowedResponses: ["like", "dislike", "unknown"],
+    });
+    expect(report.questions[0]?.text).not.toMatch(/scientific(?:ally)? rigorous/i);
+  });
+
+  it("preserves a neutral entity comparison only when both verified titles are exact", () => {
+    const safe = validateProposedQuestions({ proposals: [{
+      ...validEntity,
+      questionText: "Which would you rather read: \"Book 1\" or \"Book 3\"?",
+    }] }, candidates, session());
+    expect(safe.questions[0]?.text).toBe("Which would you rather read: \"Book 1\" or \"Book 3\"?");
+
+    const unsafe = validateProposedQuestions({ proposals: [{
+      ...validEntity,
+      questionText: "Would you rather read the thoughtful Book 1 or the exciting Book 3?",
+    }] }, candidates, session());
+    expect(unsafe.questions[0]?.text).toBe("Which book sounds more appealing: “Book 1” or “Book 3”?");
+    expect(unsafe.questions[0]?.targetIds).toEqual(["qloo:book:1", "qloo:book:3"]);
   });
 
   it("rejects duplicates, repeated dimensions, and previously asked questions", () => {
