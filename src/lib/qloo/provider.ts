@@ -5,6 +5,13 @@ export type RecommendationRequest = {
   seedEntityIds: string[];
   targetType: EntityType;
   take: number;
+  positiveEntityIds?: string[];
+  positiveTagIds?: string[];
+  excludedEntityIds?: string[];
+  excludedTagIds?: string[];
+  includeExplainability?: boolean;
+  /** Caps upstream attempts so retries cannot exceed the session budget. */
+  maxAttempts?: number;
 };
 
 /**

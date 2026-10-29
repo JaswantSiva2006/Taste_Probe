@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "results": {
+    "entities": [
+      {
+        "entity_id": "4B74CED1-CFA5-4682-B4FB-882B51593459",
+        "name": "Ender's Game",
+        "subtype": "urn:entity:book",
+        "query": { "affinity": 0.91, "explainability": { "signal": { "interests": {} } } },
+        "popularity": 0.8,
+        "properties": { "description": "A science-fiction novel.", "image": { "url": "https://example.test/ender.jpg" } },
+        "tags": [{ "id": "urn:tag:genre:media:science_fiction", "name": "Science Fiction", "type": "genre:media" }]
+      },
+      {
+        "entity_id": "BOOK-WITHOUT-METADATA",
+        "name": "Sparse Book",
+        "subtype": "urn:entity:book"
+      },
+      {
+        "entity_id": "4B74CED1-CFA5-4682-B4FB-882B51593459",
+        "name": "Duplicate",
+        "subtype": "urn:entity:book"
+      },
+      { "entity_id": "bad-no-name", "subtype": "urn:entity:book" }
+    ]
+  }
+}

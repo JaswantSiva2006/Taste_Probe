@@ -113,9 +113,9 @@ describe("POST /api/discovery/start", () => {
     await fail(await startRoute(post("/discovery/start", [])), 400, "VALIDATION_ERROR");
   });
 
-  it("fails explicitly in live mode instead of returning fixtures", async () => {
+  it("fails explicitly when live credentials are absent instead of returning fixtures", async () => {
     vi.stubEnv("QLOO_MODE", "live");
-    const json = await fail(await startRoute(post("/discovery/start", START_BODY)), 501, "LIVE_PROVIDER_NOT_IMPLEMENTED");
+    const json = await fail(await startRoute(post("/discovery/start", START_BODY)), 500, "CONFIG_ERROR");
     expect(json.meta.mode).toBe("live");
   });
 });

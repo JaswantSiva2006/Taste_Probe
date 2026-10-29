@@ -9,6 +9,7 @@ const typeUrn = (type: EntityType) => `urn:entity:${type}`;
 const mockResult = <T>(payload: T): ProviderResult<T> => ({
   provenance: "mock",
   requestId: `mock-req-${randomUUID()}`,
+  requestCount: 0,
   payload,
 });
 

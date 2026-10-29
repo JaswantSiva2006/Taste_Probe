@@ -6,7 +6,8 @@
  */
 
 export type RawTag = {
-  tag_id: string;
+  tag_id?: string;
+  id?: string;
   name: string;
   type: string;
 };
@@ -15,6 +16,7 @@ export type RawSearchEntity = {
   entity_id: string;
   name: string;
   types: string[];
+  tags?: RawTag[];
   properties?: { release_year?: number; publication_year?: number };
 };
 
@@ -27,7 +29,8 @@ export type RawInsightEntity = {
   name: string;
   subtype: string;
   /** Qloo affinity for live data; a synthetic score for fixtures. */
-  query?: { affinity?: number };
+  query?: { affinity?: number; explainability?: unknown };
+  popularity?: number;
   properties?: { description?: string; image?: { url?: string } };
   tags?: RawTag[];
 };
@@ -41,5 +44,7 @@ export type RawInsightsResponse = {
 export type ProviderResult<T> = {
   provenance: "mock" | "qloo";
   requestId: string;
+  /** Number of actual upstream HTTP attempts; zero for fixtures. */
+  requestCount: number;
   payload: T;
 };

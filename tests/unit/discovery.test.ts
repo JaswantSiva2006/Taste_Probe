@@ -58,6 +58,7 @@ describe("normalization (K1)", () => {
     const out = normalizeSearchResults({
       provenance: "mock",
       requestId: "mock-req",
+      requestCount: 0,
       payload: {
         results: [
           { entity_id: "mock:movie:a", name: "A", types: ["urn:entity:movie"], properties: { release_year: 2000 } },

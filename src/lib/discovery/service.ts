@@ -41,8 +41,16 @@ export async function searchEntities(deps: DiscoveryDeps, q: string, type?: Enti
 async function resolveSeed(deps: DiscoveryDeps, input: StartRequest): Promise<EntitySummary> {
   let seed: EntitySummary | null = null;
   if (input.selectedEntityId) {
-    const result = await deps.provider.getEntity(input.selectedEntityId);
-    seed = result.payload ? normalizeEntity(result.payload, result.provenance) : null;
+    // Re-resolve the client-selected ID against provider results for the submitted query.
+    // This keeps untrusted client IDs behind the server-side provider boundary.
+    const result = await deps.provider.searchEntities(input.entityQuery);
+    const raw = result.payload.results.find((entity) => entity.entity_id === input.selectedEntityId);
+    if (raw) {
+      seed = normalizeEntity(raw, result.provenance);
+    } else {
+      const byId = await deps.provider.getEntity(input.selectedEntityId);
+      seed = byId.payload ? normalizeEntity(byId.payload, byId.provenance) : null;
+    }
     if (!seed) throw new AppError("ENTITY_NOT_FOUND", 404, "Selected entity was not found");
   } else {
     const { results } = await searchEntities(deps, input.entityQuery, input.sourceType);
@@ -108,6 +116,12 @@ async function runAgent(
       seedEntityIds: current.session.anchorIds,
       targetType: current.session.targetType,
       take: limits.maxRecommendationCandidates,
+      positiveEntityIds: current.session.positiveEntityIds,
+      positiveTagIds: current.session.positiveTagIds,
+      excludedEntityIds: current.session.rejectedEntityIds,
+      excludedTagIds: current.session.rejectedTagIds,
+      includeExplainability: deps.config.mode === "live",
+      maxAttempts: limits.maxQlooCallsPerSession - current.session.qlooCallCount,
     });
     const candidates = normalizeRecommendations(result, current.session.anchorIds, limits.maxRecommendationCandidates);
     current = {
@@ -115,7 +129,7 @@ async function runAgent(
       candidates,
       session: {
         ...current.session,
-        qlooCallCount: current.session.qlooCallCount + 1,
+        qlooCallCount: current.session.qlooCallCount + Math.max(1, result.requestCount),
         agentToolCallCount: current.session.agentToolCallCount + 1,
       },
     };

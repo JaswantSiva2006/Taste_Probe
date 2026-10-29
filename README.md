@@ -5,8 +5,8 @@ entity (for example the movie *Interstellar*) and a target domain (books). It re
 Qloo-grounded candidates, asks up to **3** adaptive preference questions, updates your preferences from
 explicit answers, and returns at most **5** evidence-backed recommendations.
 
-This branch is **segment S1, the walking skeleton**: the whole loop runs end to end, but on **mock data
-only**. Qloo and Gemini are replaced by clearly labelled fixtures and a deterministic mock agent.
+This branch is **segment S3**. The default mock pipeline remains fully offline, while live mode uses
+authenticated Qloo Search and Insights. Gemini is still replaced by a truthfully labelled deterministic mock agent.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ Route handlers (src/app/api/**)        -- G1: validation, request IDs, JSON enve
    │  handleApi / parseJsonBody (src/lib/validation/http.ts)
    ▼
 Discovery service (src/lib/discovery/service.ts)  -- G2 orchestration
-   ├─ QlooProvider (src/lib/qloo)          T1 search, T2 insights   [mock | live placeholder]
+   ├─ QlooProvider (src/lib/qloo)          T1 search, T2 insights   [mock | live Qloo]
    ├─ normalize.ts                         K1 raw payload → public contracts, provenance kept
    ├─ questions.ts                         K2 question builder + D1 selection boundary
    ├─ preferences.ts                       D2 explicit preference updates
@@ -44,7 +44,7 @@ src/app/                 page, layout, API route handlers
 src/components/          DiscoveryApp (client state machine), RecommendationList
 src/lib/contracts/       canonical Zod schemas + types (domain.ts, api.ts)
 src/lib/config/          centralized environment config
-src/lib/qloo/            provider interface, raw types, fixtures, mock + live-placeholder providers
+src/lib/qloo/            provider interface, raw types, fixtures, mock + authenticated live providers
 src/lib/discovery/       normalizer, questions, preferences, ranking, stop, orchestration service
 src/lib/agent/           DiscoveryAgent interface, deterministic mock agent, decision validator
 src/lib/session/         token signing + session state service
@@ -54,6 +54,7 @@ tests/unit/              schemas, provider, normalization, questions, preference
 tests/integration/       route handlers end to end (start / answer / finish + negative cases)
 scripts/smoke-mock.mjs   HTTP smoke test against a real Next.js server
 scripts/probe-live.mjs   S2 live Qloo/Gemini contract probe (helpers in scripts/lib/)
+scripts/smoke-qloo.mjs   bounded real-Qloo HTTP route smoke (no Gemini calls)
 docs/                    live-api-contract.md (verified provider contracts)
 ```
 
@@ -73,11 +74,12 @@ are git-ignored; never commit credentials.
 
 | Variable | Purpose |
 | --- | --- |
-| `QLOO_MODE` | `mock` (default) or `live`. Live returns `501 LIVE_PROVIDER_NOT_IMPLEMENTED` until a later segment. It never falls back to fixtures. |
+| `QLOO_MODE` | `mock` (default) or `live`. Live uses authenticated Qloo and never falls back to fixtures. |
 | `SESSION_SIGNING_SECRET` | ≥ 32 chars. Required for `live` and for production. In non-production mock mode it may be omitted: an ephemeral random secret is generated per process, so sessions don't survive a restart. |
 | `SESSION_TTL_SECONDS` | Session lifetime (default 1800). |
 | `MAX_QUESTIONS` (≤ 3), `MAX_QLOO_CALLS_PER_SESSION`, `MAX_AGENT_TOOL_CALLS_PER_TURN`, `MAX_RECOMMENDATION_CANDIDATES`, `FINAL_RECOMMENDATION_COUNT` (≤ 5) | Budgets. |
-| `QLOO_*`, `LLM_*`, `GOOGLE_API_KEY` | Parsed but unused in S1 and never required in mock mode. |
+| `QLOO_API_KEY`, `QLOO_BASE_URL`, `QLOO_TIMEOUT_MS` | Live Qloo credentials, validated HTTPS endpoint, and timeout. Never required in mock mode. |
+| `LLM_*`, `GOOGLE_API_KEY` | Reserved for the later Gemini agent and unused by S3. |
 | `ENABLE_*`, `CACHE_TTL_SECONDS`, `SENTRY_DSN` | Parsed for later segments; not yet wired. |
 
 Generate a secret with:
@@ -97,6 +99,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `npm test` | Vitest unit + integration tests. |
 | `npm run build` | Production build. |
 | `npm run smoke:mock` | HTTP end-to-end smoke test (below). |
+| `npm run smoke:qloo` | Real Qloo-only HTTP smoke: Search, selection validation, Insights, and provenance (3 requests, 0 Gemini calls). |
 
 Open http://localhost:3000, search **Interstellar**, select it, start discovery, answer a question and
 watch the ▲/▼ markers, then continue or press **Finish now**.
@@ -120,7 +123,17 @@ watch the ▲/▼ markers, then continue or press **Finish now**.
 
 `npm run probe:live` makes **real, authenticated** calls to Qloo and Gemini to verify their contracts. The results
 are documented in [docs/live-api-contract.md](docs/live-api-contract.md). The probe is not part of `npm test` or
-`smoke:mock`, and the app itself still runs in mock mode only.
+`smoke:mock`; use `smoke:qloo` for the S3 live provider without invoking Gemini.
+
+### Live Qloo provider (S3)
+
+Live mode sends `X-Api-Key` only from the server, validates configured HTTPS base URLs, and applies bounded
+timeouts. Search uses `GET /search`; recommendations use `GET /v2/insights` with verified positive entity/tag
+signals and entity/tag exclusions. Transient 5xx responses receive at most one retry when the session request
+budget allows it; authentication, permission, billing/quota, rate-limit, and bad-request responses are not retried.
+Every live result has `evidence.source = "qloo"`. Its `evidence.requestId` is an application-generated correlation
+UUID because the observed Qloo bodies did not provide a request ID. Missing metadata stays missing, and malformed
+entities are discarded rather than replaced with fixtures.
 
 - **Credentials:** read from `.env.local` / `.env` via Next's env loader. Values in the process environment win.
   Needs `QLOO_MODE=live`, `QLOO_API_KEY`, `LLM_PROVIDER=gemini`, `LLM_MODEL`, `GOOGLE_API_KEY`. Optional:
@@ -166,7 +179,7 @@ The server builds the `PreferenceAnswer` itself (targets come from the active qu
 Main error codes: `VALIDATION_ERROR`/`INVALID_JSON` (400), `ENTITY_NOT_FOUND` (404),
 `ENTITY_TYPE_MISMATCH`/`ENTITY_NOT_RESOLVED` (400), `INVALID_QUESTION`/`INVALID_ANSWER` (400),
 `QUESTION_MISMATCH`/`SESSION_FINISHED`/`QUESTION_BUDGET_EXHAUSTED`/`SESSION_MODE_MISMATCH` (409),
-`INVALID_SESSION_TOKEN`/`SESSION_EXPIRED` (401), `LIVE_PROVIDER_NOT_IMPLEMENTED` (501).
+`INVALID_SESSION_TOKEN`/`SESSION_EXPIRED` (401), and sanitized `QLOO_*` upstream errors in live mode.
 
 ## Mock-mode limitations
 
@@ -192,7 +205,7 @@ The token payload is signed, not encrypted (it holds no secrets or personal data
 
 | Replace | Where | Contract to keep |
 | --- | --- | --- |
-| Live Qloo | `createLiveQlooProvider` in `src/lib/qloo/index.ts` | `QlooProvider` + raw types → `normalize.ts` yields `QlooRecommendationCandidate` (`evidence.source = "qloo"`) |
+| Live Qloo | Implemented in `src/lib/qloo/live-provider.ts` | `QlooProvider` + raw types → `normalize.ts` yields `QlooRecommendationCandidate` (`evidence.source = "qloo"`) |
 | Gemini agent | `createDiscoveryDeps` in `src/lib/discovery/deps.ts` | `DiscoveryAgent.decide` → `AgentDecision`, still passed through `validateAgentDecision` |
 | Question optimizer (S5) | `QuestionSelector` in `src/lib/discovery/questions.ts` | ordered `Question[]` |
 | Scoring | `rankCandidates` in `src/lib/discovery/ranking.ts` | `RankedRecommendation[]` |

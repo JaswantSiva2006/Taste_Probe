@@ -1,0 +1,12 @@
+{
+  "results": [
+    {
+      "entity_id": "057DA9D9-399B-437E-8BCA-A80E499125EF",
+      "name": "Interstellar",
+      "types": ["urn:entity:movie"],
+      "tags": [{ "tag_id": "urn:tag:genre:media:science_fiction", "name": "Science Fiction", "type": "genre:media" }],
+      "properties": { "release_year": 2014 }
+    },
+    { "entity_id": "bad-no-name", "types": ["urn:entity:movie"] }
+  ]
+}

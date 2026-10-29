@@ -57,9 +57,12 @@ function normalizeCandidate(
     name: raw.name,
     entityType: toEntityType(raw.subtype) ?? raw.subtype,
     rank,
-    description: raw.properties?.description,
-    imageUrl: raw.properties?.image?.url,
-    tags: (raw.tags ?? []).map((t) => ({ id: t.tag_id, name: t.name, type: t.type })),
+    ...(raw.properties?.description === undefined ? {} : { description: raw.properties.description }),
+    ...(raw.properties?.image?.url === undefined ? {} : { imageUrl: raw.properties.image.url }),
+    tags: (raw.tags ?? []).flatMap((t) => {
+      const id = t.id ?? t.tag_id;
+      return id && t.name.trim() && t.type.trim() ? [{ id, name: t.name, type: t.type }] : [];
+    }),
   };
 
   if (result.provenance === "mock") {
@@ -78,8 +81,13 @@ function normalizeCandidate(
   }
   return QlooRecommendationCandidateSchema.parse({
     ...base,
-    affinity: raw.query?.affinity,
-    evidence: { source: "qloo", requestId: result.requestId, seedEntityIds },
+    ...(raw.query?.affinity === undefined ? {} : { affinity: raw.query.affinity }),
+    evidence: {
+      source: "qloo",
+      requestId: result.requestId,
+      seedEntityIds,
+      ...(raw.query?.explainability === undefined ? {} : { explainability: raw.query.explainability }),
+    },
   });
 }
 
@@ -88,7 +96,11 @@ export function normalizeRecommendations(
   seedEntityIds: string[],
   limit: number,
 ): RecommendationCandidate[] {
-  return result.payload.results.entities
-    .slice(0, limit)
-    .map((raw, index) => normalizeCandidate(raw, index + 1, result, seedEntityIds));
+  const seen = new Set<string>();
+  const unique = result.payload.results.entities.filter((raw) => {
+    if (seen.has(raw.entity_id)) return false;
+    seen.add(raw.entity_id);
+    return true;
+  });
+  return unique.slice(0, limit).map((raw, index) => normalizeCandidate(raw, index + 1, result, seedEntityIds));
 }
