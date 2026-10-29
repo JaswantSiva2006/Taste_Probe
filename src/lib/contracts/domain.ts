@@ -1,11 +1,13 @@
 import { z } from "zod";
+import { SESSION_DOMAINS } from "./capabilities";
 
 /**
  * Canonical public domain contracts (skill §5). These are provider-agnostic:
  * raw Qloo/fixture response shapes live in src/lib/qloo/raw-types.ts.
  */
 
-export const EntityTypeSchema = z.enum(["movie", "book"]);
+/** Session-ready domains, owned by the S9.2 registry (currently movie | book). */
+export const EntityTypeSchema = z.enum(SESSION_DOMAINS);
 export type EntityType = z.infer<typeof EntityTypeSchema>;
 
 /** Where a piece of data came from. `mock` data must never be labelled `qloo`. */

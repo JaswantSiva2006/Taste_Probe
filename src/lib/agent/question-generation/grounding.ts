@@ -1,4 +1,4 @@
-import type { Question, RecommendationCandidate, TasteSession } from "@/lib/contracts";
+import { domainLabel, type Question, type RecommendationCandidate, type TasteSession } from "@/lib/contracts";
 import { isUsefulTag } from "@/lib/discovery/tag-quality";
 import { ProposedQuestionBatchSchema, type ProposedQuestion } from "./schema";
 import { renderEntityQuestion, renderTagQuestion } from "./renderer";
@@ -45,7 +45,7 @@ function canonicalTagQuestion(proposal: ProposedQuestion, candidates: Recommenda
     }
   }
   if (!proposal.evidence.some((evidence) => evidence.tagIds.includes(tagId))) return "incorrect_association";
-  const noun = carriers[0]!.entityType === "book" ? "books" as const : "movies" as const;
+  const noun = domainLabel(carriers[0]!.entityType, true);
   return {
     questionId: "tag:" + tagId,
     text: renderTagQuestion({ proposal, tag, noun, strategy: "hybrid" }),
@@ -72,7 +72,7 @@ function canonicalEntityQuestion(proposal: ProposedQuestion, candidates: Recomme
     }
   }
   if (![aId, bId].every((id) => proposal.evidence.some((evidence) => evidence.entityId === id))) return "incorrect_association";
-  const noun = a.entityType === "book" ? "book" : "movie";
+  const noun = domainLabel(a.entityType);
   return {
     questionId: "entity:" + aId + "|" + bId,
     text: renderEntityQuestion({ proposal, aName: a.name, bName: b.name, noun }),

@@ -1,9 +1,10 @@
-import type {
-  EntityType,
-  Question,
-  RankedRecommendation,
-  RecommendationCandidate,
-  TasteSession,
+import {
+  domainLabel,
+  type EntityType,
+  type Question,
+  type RankedRecommendation,
+  type RecommendationCandidate,
+  type TasteSession,
 } from "@/lib/contracts";
 import { optimizeQuestions } from "./question-optimizer";
 import { isUsefulTag } from "./tag-quality";
@@ -24,7 +25,7 @@ function tagQuestions(candidates: RecommendationCandidate[], targetType: EntityT
       tags.set(tag.id, entry);
     }
   }
-  const noun = targetType === "book" ? "books" : "movies";
+  const noun = domainLabel(targetType, true);
   return [...tags.entries()]
     .filter(([, tag]) => tag.count > 0 && tag.count < candidates.length)
     .map(([tagId, tag]) => ({
@@ -39,7 +40,7 @@ function tagQuestions(candidates: RecommendationCandidate[], targetType: EntityT
 
 function entityQuestions(candidates: RecommendationCandidate[], targetType: EntityType): Question[] {
   if (candidates.length < 2) return [];
-  const noun = targetType === "book" ? "book" : "movie";
+  const noun = domainLabel(targetType);
   const pool = [...candidates].sort((a, b) => a.rank - b.rank || a.entityId.localeCompare(b.entityId)).slice(0, 8);
   const pairs: Array<{ a: RecommendationCandidate; b: RecommendationCandidate; diversity: number }> = [];
   for (let i = 0; i < pool.length; i += 1) {

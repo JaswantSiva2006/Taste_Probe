@@ -4,14 +4,25 @@ Baseline: S9.1 `9dd3ffe` on `seg/S9-2-discovery-path`. S9.2 adds a server-owned 
 
 ## 1. Registry (`src/lib/contracts/capabilities.ts`)
 
+The registry is domain-agnostic. Source and target domains are configured independently, and every other layer reads domain facts from it, so nothing outside the registry branches on `"book"` or `"movie"`.
+
 | Export | Purpose |
 |---|---|
-| `CulturalDomainSchema` | Product domains: `movie`, `book`, `music_artist`. |
-| `QLOO_WIRE_TYPES`, `qlooTypeOf()` | The **only** product → Qloo type mapping. Both providers use it now; the old `` `urn:entity:${type}` `` string was removed from each. |
+| `DOMAINS` | One frozen row per domain: `qlooType`, `noun`, `plural`, `verb` (read / watch / listen to), `narrative` (whether "stories" is acceptable wording), and `sessionReady`. |
+| `CulturalDomainSchema`, `SESSION_DOMAINS` | All registered domains, and the subset a session can hold. `EntityTypeSchema` (used by request, session and view contracts) is now **derived** from `SESSION_DOMAINS`. |
+| `QLOO_WIRE_TYPES`, `qlooTypeOf()`, `sessionDomainOfQlooType()` | The only product ↔ Qloo type mapping, in both directions. Both providers and `normalize.ts` use it; the hard-coded `urn:entity:${type}` and `movie \|\| book` checks were removed. |
+| `domainLabel()`, `domainLanguageOfPlural()` | Nouns and verbs for questions (`questions.ts`, `grounding.ts`, `renderer.ts`) and for Discovery Path copy. |
 | `DOMAIN_PAIRS` | Frozen rows `{source, target, enabled, evidence}`. |
-| `pairStatus()` / `isEnabledPair()` | `enabled`, `disabled` (registered but off) or `unregistered`. |
-| `enabledSourceDomains()` | Sources of enabled pairs; these are the domains a user can search as an anchor. |
-| `publicCapabilities()` + `PublicCapabilitiesSchema` | Safe projection: enabled pairs and labels only, with no wire types, evidence or disabled rows. |
+| `registryProblems()` | A pure structural check that runs **at module load**, so the server will not start with an invalid registry. An enabled pair must use session-ready domains and carry `FULL_E2E_VERIFIED` evidence; same-domain and duplicate pairs are refused; and `sessionReady` must agree with `SESSION_DOMAINS`. |
+| `pairStatus()` / `isEnabledPair()` | Returns `enabled`, `disabled` (registered but off) or `unregistered`. |
+| `enabledSourceDomains()` | The sources of enabled pairs, which are the domains a user can search for as an anchor. |
+| `publicCapabilities()` + `PublicCapabilitiesSchema` | The safe projection: enabled pairs with their labels only. No wire types, no evidence, no disabled rows. |
+
+### Adding a verified domain pair
+
+1. **Both domains already session-ready** (for example book → movie). Add one `DOMAIN_PAIRS` row. Set `enabled: true` only after a bounded live Search → Start → Answer → Finish run, together with its `FULL_E2E_VERIFIED` evidence. No other file changes.
+2. **New domain** (for example `music_artist` in S9.4). Complete its `DOMAINS` row, set `sessionReady: true` and add it to `SESSION_DOMAINS`. The session enum, search normalization, provider URNs, question nouns and path copy then pick it up automatically. Add domain-specific normalization only where Qloo's metadata for that type differs, inside the existing adapter (`normalize.ts`).
+3. The startup check and `tests/unit/capabilities.test.ts` reject any step that is skipped.
 
 | Pair | Qloo wire types | Status | Evidence |
 |---|---|---|---|
@@ -21,7 +32,7 @@ Baseline: S9.1 `9dd3ffe` on `seg/S9-2-discovery-path`. S9.2 adds a server-owned 
 
 `urn:entity:music_artist` is not a Qloo type and appears nowhere in the code; a test asserts this.
 
-The public projection is published additively as `data.capabilities` on `GET /api/health`, currently `{ pairs: [{ source: "movie", target: "book", sourceLabel: "film", targetLabel: "books" }] }`. There is no new endpoint.
+The public projection is published additively as `data.capabilities` on `GET /api/health`, currently `{ pairs: [{ source: "movie", target: "book", sourceLabel: "movie", targetLabel: "books" }] }`. There is no new endpoint.
 
 ## 2. Server-side validation
 
@@ -82,6 +93,8 @@ The input is the finished view's `recommendations` (the top `FINAL_RECOMMENDATIO
 4. **GO_FURTHER** is reserved and never emitted. No current Qloo field supports a difficulty, depth or novelty claim, and the validator flags it.
 5. **remainingEntityIds** lists all other final recommendations in ranked order, including explicitly rejected ones.
 
+The presenter has no knowledge of particular domains. It works on generic `RankedRecommendation` entities. Nouns come from `domainLabel(targetType)`, and the contrast tags come from the shared `isUsefulTag` filter. A test runs a book → movie path and checks that no book wording appears in it.
+
 With fewer candidates the path simply has fewer entries: 1 recommendation gives START HERE only, 2 give START HERE and EXPLORE NEXT, and 0 give an empty path. There are never placeholders, new entities, Qloo or Gemini calls, ranking changes or session writes.
 
 ## 5. Explanation grounding
@@ -126,7 +139,7 @@ The difference from the earlier spec is recorded here and not resolved silently;
 |---|---|
 | `npm run lint` | 0 errors (1 pre-existing warning in the untracked `web-design-atelier` skill) |
 | `npm run typecheck` | pass |
-| `npm test` | 328 passed, 4 skipped (was 289; +39 S9.2 tests) |
+| `npm test` | 335 passed, 4 skipped (was 289; +46 S9.2 tests) |
 | `npm run build` | pass |
 | `npm run smoke` (= `smoke:mock`, real HTTP) | pass, now also asserting `START_HERE > EXPLORE_NEXT > ANOTHER_DIRECTION + 2 more` |
 | `npm run evaluate:questions` / `evaluate:question-quality` / `evaluate:question-wording` (S8.7) | pass |
@@ -136,7 +149,7 @@ The difference from the earlier spec is recorded here and not resolved silently;
 
 ## 8. S9.3 UI integration notes
 
-- **Capabilities.** Read `health.data.capabilities.pairs`, and offer only those pairs: today, “film → books”. Keep sending the unchanged start body `{sourceType:"movie", targetType:"book", …}`. Never show disabled pairs, even greyed out, unless product decides otherwise.
+- **Capabilities.** Read `health.data.capabilities.pairs`, and offer only those pairs: today, “movie → books”. Use `sourceLabel` and `targetLabel` instead of hard-coding nouns. The UI can still say "film" as a stylistic choice. Keep sending the unchanged start body `{sourceType:"movie", targetType:"book", …}`. Never show disabled pairs, even greyed out, unless product decides otherwise.
 - **Finale layout.** When `view.discoveryPath` is present:
   - Resolve each `recommendationEntityId` against `view.recommendations` for the cover, title and tags.
   - Render `START_HERE` as dominant, then `EXPLORE_NEXT`, then the optional `ANOTHER_DIRECTION`, then `remainingEntityIds`.
@@ -148,7 +161,11 @@ The difference from the earlier spec is recorded here and not resolved silently;
 
 ## 9. Remaining limitations
 
-- `music_artist → book` stays disabled until S9.4 runs a bounded live Search → Start → Answer → Finish session. Enabling it also requires adding `music_artist` to `EntityTypeSchema` and artist search normalization.
+- `music_artist → book` stays disabled until S9.4 runs a bounded live Search → Start → Answer → Finish session.
+  - Enabling it means marking `music_artist` session-ready in the registry and checking artist search normalization, for example artist metadata that has no year.
+  - Book-target questions and path copy need no change.
+- Question templates for non-narrative targets are still limited. The deterministic setting, motif and theme templates say "stories", so a future non-narrative *target*, such as music artists, needs its own wording rules before it is enabled. Artist as a *source* is unaffected.
+- The UI (`src/lib/ui/presentation.ts` and components) still hard-codes film/book copy. Moving that to the registry labels is S9.3's job.
 - Contrast evidence is tag-based only. Descriptions are not used for contrasts, because paraphrasing them risks invented claims.
 - Contrast uses only tag presence or absence. It says nothing about degree or quality, so the role names are product framing, not calibrated suitability.
 - The banned-claim lexicon is conservative and English-only.

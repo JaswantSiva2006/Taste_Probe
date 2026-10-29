@@ -283,7 +283,7 @@ describe("POST /api/discovery/finish", () => {
 describe("S9.2 domain registry and Discovery Path over HTTP", () => {
   it("health exposes only enabled pairs", async () => {
     const json = await (await healthRoute()).json();
-    expect(json.data.capabilities).toEqual({ pairs: [{ source: "movie", target: "book", sourceLabel: "film", targetLabel: "books" }] });
+    expect(json.data.capabilities).toEqual({ pairs: [{ source: "movie", target: "book", sourceLabel: "movie", targetLabel: "books" }] });
   });
 
   it("rejects unsupported pairs and domain values with clear errors", async () => {

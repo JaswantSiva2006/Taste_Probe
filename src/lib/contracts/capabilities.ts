@@ -3,32 +3,70 @@ import { z } from "zod";
 /**
  * S9.2 server-authoritative domain capability registry.
  *
- * Product domains are TasteProbe's names; Qloo wire types are owned here and
- * nowhere else (Qloo calls a music artist `urn:entity:artist`, not
- * `music_artist`). Only pairs listed below exist, and only enabled pairs may
- * start a session. The browser never declares capabilities: it may only read
- * the public projection.
+ * Everything TasteProbe knows about a cultural domain lives in DOMAINS, and
+ * every source → target capability lives in DOMAIN_PAIRS. The rest of the
+ * pipeline (provider URNs, normalization, question nouns, Discovery Path copy,
+ * session enums) reads from here, so adding a verified pair is a local change:
+ *
+ *   1. add/complete the domain row (Qloo wire type, nouns, `sessionReady`);
+ *   2. add the pair row and enable it only after a bounded live E2E run.
+ *
+ * `sessionReady` means the domain is in the session enum and the existing
+ * normalizer/question adapters handle it. The module refuses to load if an
+ * enabled pair uses a domain that is not session-ready.
+ *
+ * The browser never declares capabilities: it may only read the public projection.
  */
 
-export const CulturalDomainSchema = z.enum(["movie", "book", "music_artist"]);
-export type CulturalDomain = z.infer<typeof CulturalDomainSchema>;
-
-export const QLOO_WIRE_TYPES = {
-  movie: "urn:entity:movie",
-  book: "urn:entity:book",
-  music_artist: "urn:entity:artist",
-} as const satisfies Record<CulturalDomain, `urn:entity:${string}`>;
-
-export const qlooTypeOf = (domain: CulturalDomain): string => QLOO_WIRE_TYPES[domain];
-
-const DOMAIN_LABELS: Record<CulturalDomain, { singular: string; plural: string }> = {
-  movie: { singular: "film", plural: "films" },
-  book: { singular: "book", plural: "books" },
-  music_artist: { singular: "music artist", plural: "music artists" },
+export type DomainDefinition = {
+  /** Verified Qloo wire type. Qloo calls a music artist `urn:entity:artist`. */
+  readonly qlooType: `urn:entity:${string}`;
+  readonly noun: string;
+  readonly plural: string;
+  /** How a person consumes it, for wording like "read more …". */
+  readonly verb: string;
+  /** Narrative media may be described as "stories" in question wording. */
+  readonly narrative: boolean;
+  readonly sessionReady: boolean;
 };
 
-export const domainLabel = (domain: CulturalDomain, plural = false): string =>
-  plural ? DOMAIN_LABELS[domain].plural : DOMAIN_LABELS[domain].singular;
+const ALL_DOMAINS = ["movie", "book", "music_artist"] as const;
+/** Domains a session can hold today (normalization + question adapters exist). */
+export const SESSION_DOMAINS = ["movie", "book"] as const;
+
+export const CulturalDomainSchema = z.enum(ALL_DOMAINS);
+export type CulturalDomain = z.infer<typeof CulturalDomainSchema>;
+
+export const DOMAINS: Readonly<Record<CulturalDomain, DomainDefinition>> = Object.freeze({
+  movie: Object.freeze({ qlooType: "urn:entity:movie", noun: "movie", plural: "movies", verb: "watch", narrative: true, sessionReady: true }),
+  book: Object.freeze({ qlooType: "urn:entity:book", noun: "book", plural: "books", verb: "read", narrative: true, sessionReady: true }),
+  // Registered for S9.4; Search/Insights verified in S9.1, no session adapter yet.
+  music_artist: Object.freeze({ qlooType: "urn:entity:artist", noun: "music artist", plural: "music artists", verb: "listen to", narrative: false, sessionReady: false }),
+} as const);
+
+export const QLOO_WIRE_TYPES: Readonly<Record<CulturalDomain, string>> = Object.freeze(
+  Object.fromEntries(ALL_DOMAINS.map((d) => [d, DOMAINS[d].qlooType])) as Record<CulturalDomain, string>,
+);
+
+export const qlooTypeOf = (domain: CulturalDomain): string => DOMAINS[domain].qlooType;
+
+const isDomain = (value: string): value is CulturalDomain => (ALL_DOMAINS as readonly string[]).includes(value);
+
+/** Reverse wire mapping, limited to session-ready domains (unknown or unsupported → undefined). */
+export function sessionDomainOfQlooType(urn: string | undefined): (typeof SESSION_DOMAINS)[number] | undefined {
+  const domain = ALL_DOMAINS.find((d) => DOMAINS[d].qlooType === urn);
+  return domain && (SESSION_DOMAINS as readonly string[]).includes(domain) ? (domain as (typeof SESSION_DOMAINS)[number]) : undefined;
+}
+
+/** Display noun for a domain; an unregistered value is returned as-is rather than guessed. */
+export const domainLabel = (domain: string, plural = false): string =>
+  isDomain(domain) ? (plural ? DOMAINS[domain].plural : DOMAINS[domain].noun) : domain;
+
+/** Language facts for a plural noun (used by question renderers that receive nouns). */
+export function domainLanguageOfPlural(plural: string): Pick<DomainDefinition, "verb" | "narrative"> {
+  const domain = ALL_DOMAINS.find((d) => DOMAINS[d].plural === plural);
+  return domain ? DOMAINS[domain] : { verb: "explore", narrative: false };
+}
 
 /** Strongest evidence level reached for a pair (S9.1 audit vocabulary). */
 export const CapabilityEvidenceSchema = z.enum(["FULL_E2E_VERIFIED", "VERIFIED_INSIGHTS", "INCONCLUSIVE"]);
@@ -43,10 +81,37 @@ export type DomainPairCapability = {
 
 export const DOMAIN_PAIRS: readonly DomainPairCapability[] = Object.freeze([
   Object.freeze({ source: "movie", target: "book", enabled: true, evidence: "FULL_E2E_VERIFIED" } as const),
-  // S9.1: Search + Insights verified with a real artist ID; the full session journey was not.
+  // S9.1: Search + Insights verified with a real artist ID; the full session journey was not (S9.4).
   Object.freeze({ source: "music_artist", target: "book", enabled: false, evidence: "VERIFIED_INSIGHTS" } as const),
   Object.freeze({ source: "movie", target: "music_artist", enabled: false, evidence: "INCONCLUSIVE" } as const),
 ]);
+
+/** Structural rules every registry must satisfy; pure so a proposed table can be checked in tests. */
+export function registryProblems(
+  pairs: readonly DomainPairCapability[],
+  domains: Readonly<Record<CulturalDomain, DomainDefinition>>,
+): string[] {
+  const problems: string[] = [];
+  for (const d of ALL_DOMAINS) {
+    if (domains[d].sessionReady !== (SESSION_DOMAINS as readonly string[]).includes(d)) {
+      problems.push(`${d}: sessionReady disagrees with SESSION_DOMAINS`);
+    }
+  }
+  const keys = pairs.map((p) => `${p.source}->${p.target}`);
+  if (new Set(keys).size !== keys.length) problems.push("duplicate pair");
+  for (const p of pairs) {
+    if (p.source === p.target) problems.push(`${p.source}->${p.target}: same-domain pair`);
+    if (!p.enabled) continue;
+    for (const d of [p.source, p.target]) {
+      if (!domains[d].sessionReady) problems.push(`${p.source}->${p.target}: ${d} has no session adapter`);
+    }
+    if (p.evidence !== "FULL_E2E_VERIFIED") problems.push(`${p.source}->${p.target}: enabled without FULL_E2E_VERIFIED evidence`);
+  }
+  return problems;
+}
+
+const startupProblems = registryProblems(DOMAIN_PAIRS, DOMAINS);
+if (startupProblems.length) throw new Error(`Invalid domain registry: ${startupProblems.join("; ")}`);
 
 export type PairStatus = "enabled" | "disabled" | "unregistered";
 

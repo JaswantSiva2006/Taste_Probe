@@ -27,7 +27,7 @@ const MAX_PREFERENCE_TAGS = 2;
  * verified name (a tag or the seed title).
  */
 const UNSUPPORTED_CLAIM =
-  /\b(beginners?|easy|easier|accessible|challenging|difficult|harder|advanced|novel(?:ty)?|obscure|adventurous|popular|bestsell\w*|acclaimed|classic|must[- ]read|perfect|best|inspired|similar|because)\b/i;
+  /\b(beginners?|easy|easier|accessible|challenging|difficult|harder|advanced|novel(?:ty)?|obscure|adventurous|popular|bestsell\w*|acclaimed|classic|must[- ](?:read|watch|listen)|perfect|best|inspired|similar|because)\b/i;
 
 const quote = (name: string) => `“${name}”`;
 const listOf = (names: string[]) =>

@@ -2,6 +2,7 @@ import {
   EntitySummarySchema,
   MockRecommendationCandidateSchema,
   QlooRecommendationCandidateSchema,
+  sessionDomainOfQlooType,
   type EntitySummary,
   type EntityType,
   type RecommendationCandidate,
@@ -16,12 +17,8 @@ import type {
 
 /** K1 — converts raw provider payloads into public contracts, preserving provenance. */
 
-const ENTITY_URN_PREFIX = "urn:entity:";
-
-function toEntityType(urn: string | undefined): EntityType | undefined {
-  const type = urn?.startsWith(ENTITY_URN_PREFIX) ? urn.slice(ENTITY_URN_PREFIX.length) : undefined;
-  return type === "movie" || type === "book" ? type : undefined;
-}
+/** Wire type → session domain via the S9.2 registry; unregistered types stay unrecognised. */
+const toEntityType = (urn: string | undefined): EntityType | undefined => sessionDomainOfQlooType(urn);
 
 export function normalizeEntity(
   raw: RawSearchEntity,

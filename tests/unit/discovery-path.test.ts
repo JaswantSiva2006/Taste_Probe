@@ -206,6 +206,31 @@ describe("buildDiscoveryPath — grounded explanations", () => {
   });
 });
 
+describe("buildDiscoveryPath — domain-agnostic", () => {
+  it("works for a non-book target with generic verified entities (book -> movie)", () => {
+    const films = [
+      { ...qloo("m1", 1, [T.space]), entityType: "movie" },
+      { ...qloo("m2", 2, [T.space]), entityType: "movie" },
+      { ...qloo("m3", 3, [T.mystery]), entityType: "movie" },
+    ];
+    const i: PathInput = {
+      ...input(films, { ...noPrefs, positiveEntityIds: ["m1"] }),
+      seed: { entityId: SEED, name: "Dune", entityType: "book", provenance: "qloo" },
+      targetType: "movie",
+    };
+    const path = buildDiscoveryPath(i);
+    expect(path).toMatchObject({ sourceType: "book", targetType: "movie" });
+    expect(path.featured.map((f) => [f.role, f.recommendationEntityId])).toEqual([
+      ["START_HERE", "m1"], ["EXPLORE_NEXT", "m2"], ["ANOTHER_DIRECTION", "m3"],
+    ]);
+    const text = path.featured.map((f) => f.explanation.text).join(" ");
+    expect(text).toContain("You said yes to this movie");
+    expect(text).toContain("Qloo returned this among its movies for fans of “Dune”");
+    expect(text).not.toMatch(/\bbooks?\b/);
+    expect(discoveryPathProblems(path, i)).toEqual([]);
+  });
+});
+
 describe("explanation validator rejects unsupported claims", () => {
   const i = input(five(), { ...noPrefs, positiveTagIds: [T.war.id] });
   const base = buildDiscoveryPath(i).featured[0]!;
