@@ -1635,6 +1635,175 @@ body {
   color: var(--tp-paper-ink);
 }
 
+/* ---------------------------------------------------------------- S9.7 continuous exploration */
+
+.tp-round {
+  font-style: normal;
+  letter-spacing: 0.02em;
+}
+.tp-round-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid rgba(233, 164, 59, 0.55);
+  border-radius: 999px;
+  padding: 0 0.6rem;
+  color: var(--tp-amber);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* per-pick actions: primary "I'll try this", secondary "Not for me" */
+.tp-pick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tp-s2);
+}
+.tp-pick-actions--sm {
+  margin: var(--tp-s1) 0 var(--tp-s3);
+}
+.tp-btn--ink-solid {
+  border: 1px solid var(--tp-paper-ink);
+  background: var(--tp-paper-ink);
+  color: var(--tp-paper);
+}
+.tp-btn--ink-solid:hover:not(:disabled) {
+  background: #3a3127;
+}
+.tp-btn--ink-solid:disabled,
+.tp-btn--ink:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+/* keep exploring: its own panel, so continuing is never confused with rejecting */
+.tp-continue {
+  display: grid;
+  gap: var(--tp-s4);
+  align-items: center;
+  margin-top: var(--tp-s6);
+  border: 1px solid rgba(31, 26, 20, 0.3);
+  border-left: 4px solid var(--tp-amber-deep);
+  border-radius: var(--tp-radius);
+  background: rgba(233, 164, 59, 0.1);
+  padding: var(--tp-s4) var(--tp-s5);
+}
+.tp-continue__title {
+  margin: 0;
+  font-family: var(--tp-serif);
+  font-size: clamp(1.45rem, 1vw + 1.1rem, 1.9rem);
+  font-weight: 400;
+  line-height: 1.15;
+}
+.tp-continue__body {
+  max-width: 40rem;
+  margin: var(--tp-s1) 0 0;
+  color: var(--tp-paper-ink);
+}
+.tp-continue__body--blocked {
+  color: var(--tp-dislike);
+  font-weight: 600;
+}
+.tp-continue__meta {
+  margin: var(--tp-s2) 0 0;
+  color: var(--tp-paper-muted);
+  font-size: var(--tp-small);
+}
+.tp-continue__btn {
+  justify-self: start;
+}
+.tp-programme .tp-continue__btn:not(:disabled) {
+  background: var(--tp-paper-ink);
+  color: var(--tp-paper);
+}
+.tp-programme .tp-continue__btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* accepted completion */
+.tp-start__label--chosen {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #2f6b3a;
+}
+.tp-start--accepted {
+  box-shadow: inset 0 0 0 4px var(--tp-paper), inset 0 0 0 5px rgba(47, 107, 58, 0.45);
+}
+
+/* cumulative taste notes */
+.tp-notes__span {
+  color: var(--tp-text-muted);
+  font-family: var(--tp-sans);
+  font-size: var(--tp-small);
+}
+.tp-notes__group {
+  margin-top: var(--tp-s3);
+}
+.tp-notes__sub {
+  margin: 0 0 var(--tp-s2);
+  color: var(--tp-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.tp-note--setaside {
+  border-style: dashed;
+  color: var(--tp-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(229, 154, 138, 0.6);
+}
+.tp-history {
+  margin-top: var(--tp-s3);
+}
+.tp-history summary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--tp-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+.tp-history__list {
+  display: grid;
+  gap: var(--tp-s1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tp-history__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--tp-s3);
+  align-items: baseline;
+  border-bottom: 1px solid var(--tp-line);
+  padding: 0.35rem 0;
+  font-size: 0.875rem;
+}
+.tp-history__round {
+  color: var(--tp-text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.tp-history__label {
+  overflow-wrap: anywhere;
+}
+.tp-history__answer {
+  color: var(--tp-text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tp-history__item--liked .tp-history__answer {
+  color: var(--tp-like);
+}
+.tp-history__item--passed .tp-history__answer {
+  color: var(--tp-dislike);
+}
+
 /* ---------------------------------------------------------------- breakpoints */
 
 @media (min-width: 640px) {
@@ -1661,6 +1830,9 @@ body {
   .tp-start__actions {
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
     align-items: start;
+  }
+  .tp-continue {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
   .tp-programme__foot {
     grid-template-columns: minmax(0, 1fr) auto;

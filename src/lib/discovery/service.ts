@@ -378,7 +378,28 @@ function explorationOf(deps: DiscoveryDeps, state: SessionState, finalIds: strin
     continueBlockedReason: reason,
     budget: { qlooUsed: session.qlooCallCount, qlooMax: deps.config.limits.maxQlooCallsPerSession, geminiUsed, geminiMax },
     expiresAt: session.expiresAt,
+    answerHistory: answerHistoryOf(state),
   };
+}
+
+const ANSWER_HISTORY_LIMIT = 40;
+/** Readable fallback for an ID whose verified name is no longer in the candidate pool. */
+const lastSegment = (id: string) => (id.split(/[:/]/).filter(Boolean).at(-1) ?? id).replace(/[_-]+/g, " ").trim() || id;
+
+/** S9.7: stored answers with labels resolved from verified candidate data only. */
+function answerHistoryOf(state: SessionState): NonNullable<ExplorationState["answerHistory"]> {
+  const tags = new Map(state.candidates.flatMap((c) => c.tags.map((t) => [t.id, t.name] as const)));
+  const names = new Map(state.candidates.map((c) => [c.entityId, c.name] as const));
+  return state.session.answers.slice(-ANSWER_HISTORY_LIMIT).map((a) => ({
+    round: a.round ?? 1,
+    questionId: a.questionId,
+    targetType: a.targetType,
+    response: a.response,
+    label:
+      a.targetType === "tag"
+        ? (tags.get(a.targetIds[0] ?? "") ?? lastSegment(a.targetIds[0] ?? ""))
+        : a.targetIds.map((id) => names.get(id) ?? lastSegment(id)).join(" vs "),
+  }));
 }
 
 type LiveExtras = {

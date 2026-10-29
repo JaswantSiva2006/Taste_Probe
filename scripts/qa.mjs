@@ -55,7 +55,9 @@ try {
   if (!ready) throw new Error("mock server did not become ready (must report mode=mock)");
   console.log(`qa: mock server ready at ${base}`);
   const run = spawnSync(process.execPath, ["scripts/ui-qa.mjs", "--url", base, ...passthrough], { stdio: "inherit" });
-  process.exitCode = run.status ?? 1;
+  // S9.7: multi-round journeys against the same mock server.
+  const rounds = spawnSync(process.execPath, ["scripts/ui-qa-rounds.mjs", "--url", base], { stdio: "inherit" });
+  process.exitCode = (run.status ?? 1) || (rounds.status ?? 1);
 } catch (error) {
   console.error(`qa failed: ${error instanceof Error ? error.message : error}`);
   process.exitCode = 1;

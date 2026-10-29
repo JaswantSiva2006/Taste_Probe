@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { publicCapabilities, type DiscoveryView, type PublicDomainPair, type RankedRecommendation } from "@/lib/contracts";
+import { publicCapabilities, type DiscoveryView, type PreferenceResponse, type PublicDomainPair, type RankedRecommendation } from "@/lib/contracts";
 import { artAlt, isOfferedPair, lookOf, sourceChoices, targetChoices, withArticle } from "@/lib/ui/domains";
-import { createNameBook, finishLine, friendlyError, resolvePath, ROLE_LABEL, updateNotice } from "@/lib/ui/presentation";
+import { continueBlockedCopy, createNameBook, finishLine, friendlyError, historyAnswer, resolvePath, ROLE_LABEL, updateNotice } from "@/lib/ui/presentation";
 
 /** S9.4: the onboarding derives every choice from the server projection. */
 
@@ -136,6 +136,50 @@ describe("Discovery Path finale", () => {
 
   it("early finish is described truthfully, never as an answered question", () => {
     expect(finishLine(finished({ finishReason: "insufficient_question_evidence", questionCount: 0 }))).toMatch(/none was asked/);
+  });
+});
+
+describe("S9.7 continuous exploration copy", () => {
+  const ex = (over: Partial<NonNullable<DiscoveryView["exploration"]>> = {}): NonNullable<DiscoveryView["exploration"]> => ({
+    explorationId: "s",
+    round: 2,
+    status: "presenting",
+    acceptedEntityId: null,
+    rejectedRecommendationIds: [],
+    totalQuestionsAsked: 4,
+    previouslyPresentedIds: [],
+    unseenCandidateCount: 1,
+    canContinue: true,
+    continueBlockedReason: null,
+    budget: { qlooUsed: 1, qlooMax: 6, geminiUsed: 2, geminiMax: 20 },
+    expiresAt: 0,
+    ...over,
+  });
+
+  it("explains a blocked continue from the backend reason only", () => {
+    expect(continueBlockedCopy(finished({ exploration: ex() }))).toBeNull();
+    expect(continueBlockedCopy(finished({ exploration: ex({ canContinue: false, continueBlockedReason: "candidates_exhausted" }) }))).toMatch(/every verified music artist found for Interstellar/);
+    expect(continueBlockedCopy(finished({ exploration: ex({ canContinue: false, continueBlockedReason: "budget_exhausted" }) }))).toMatch(/question allowance/);
+    expect(continueBlockedCopy(finished({ exploration: undefined }))).toBeNull();
+  });
+
+  it("a skip in the history is never shown as a dislike", () => {
+    const h = (response: PreferenceResponse) => historyAnswer({ round: 1, questionId: "q", targetType: "tag", response, label: "X" });
+    expect(h("unknown")).toEqual({ text: "Skipped (not counted)", kind: "skipped" });
+    expect(h("dislike").kind).toBe("passed");
+    expect(h("like").kind).toBe("liked");
+  });
+
+  it("no stale update notice once a new round begins", () => {
+    const names = createNameBook();
+    const answeredR1 = { questionId: "q", targetType: "tag" as const, targetIds: ["t"], response: "like" as const, timestamp: 1 };
+    expect(updateNotice(finished({ status: "asking", lastAnswer: answeredR1, exploration: ex({ round: 2, status: "asking" }) }), names)).toBeNull();
+    expect(updateNotice(finished({ status: "asking", lastAnswer: { ...answeredR1, round: 2 }, exploration: ex({ round: 2, status: "asking" }) }), names)).not.toBeNull();
+  });
+
+  it("new exploration errors are recoverable without blind retries", () => {
+    for (const code of ["EXPLORATION_EXHAUSTED", "EXPLORATION_BUDGET_EXHAUSTED", "INVALID_RECOMMENDATION", "ROUND_IN_PROGRESS"]) expect(friendlyError(code).recovery).toBe("edit");
+    expect(friendlyError("EXPLORATION_CLOSED").recovery).toBe("restart");
   });
 });
 

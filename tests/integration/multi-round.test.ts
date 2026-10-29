@@ -204,6 +204,12 @@ describe("S9.6 feedback semantics and safety", () => {
     const f1 = await playRound(await start(), ["unknown", "unknown", "unknown"], []);
     const f2 = await playRound(await ok(await cont(f1)), ["unknown"], []);
     expect(f2.preferences).toEqual({ positiveTagIds: [], rejectedTagIds: [], positiveEntityIds: [], rejectedEntityIds: [] });
+    // S9.7 projection: the server's own history, labelled from verified tags, skips kept as "unknown".
+    const history = f2.exploration!.answerHistory!;
+    expect(history.length).toBe(4);
+    expect(history.map((h) => h.round)).toEqual([1, 1, 1, 2]);
+    expect(history.every((h) => h.response === "unknown" && h.targetType === "tag" && h.label.length > 0)).toBe(true);
+    expect(f2.exploration!.totalQuestionsAsked).toBeGreaterThanOrEqual(history.length);
   });
 
   it("refuses fabricated, unshown, or mid-round feedback before any change", async () => {

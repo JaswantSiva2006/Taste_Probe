@@ -162,6 +162,8 @@ export type UpdateNotice = { mechanism: UpdateMechanism; title: string; detail: 
  */
 export function updateNotice(view: DiscoveryView, names: NameBook): UpdateNotice | null {
   if (!view.lastAnswer) return null;
+  // S9.7: after "Keep exploring" the last answer belongs to an earlier round; nothing changed yet in this one.
+  if (view.exploration && (view.lastAnswer.round ?? 1) !== view.exploration.round) return null;
   const mechanism: UpdateMechanism = view.recommendationUpdate?.mechanism ?? (view.rankingChanged ? "LOCAL_RERANK" : "UNCHANGED");
   const moved = view.recommendations.filter((r) => r.previousPosition !== null && r.previousPosition !== r.position).length;
   const arrived = view.recommendations.filter((r) => r.previousPosition === null).length;
@@ -285,10 +287,67 @@ export function friendlyError(code: string, ctx: ErrorContext = {}): FriendlyErr
       return { title: "New explorations are paused", body: "TasteProbe is temporarily pausing new sessions. Please try again shortly.", recovery: "retry" };
     case "VALIDATION_ERROR":
       return { title: "That didn't look right", body: "Check what you typed and try again.", recovery: "edit" };
+    // S9.6/S9.7 multi-round exploration
+    case "EXPLORATION_CLOSED":
+      return { title: "This exploration is complete", body: "You already chose where to start. Explore another world to begin again.", recovery: "restart" };
+    case "EXPLORATION_EXHAUSTED":
+      return { title: "Nothing new left to explore here", body: `Every verified ${picks} for this ${anchor} has been shown or turned down, and no new question remains. Your picks stay on screen; try a different ${anchor} or destination.`, recovery: "edit" };
+    case "EXPLORATION_BUDGET_EXHAUSTED":
+      return { title: "This exploration has used its allowance", body: "Your picks and everything you told us stay on screen. Start a new exploration to keep going.", recovery: "edit" };
+    case "ROUND_IN_PROGRESS":
+      return { title: "Finish this round first", body: "Answer or end the current round before choosing a pick.", recovery: "edit" };
+    case "INVALID_RECOMMENDATION":
+      return { title: "That pick is no longer on screen", body: "Your results changed. Choose from the picks shown now.", recovery: "edit" };
     default:
       return { title: "Something went wrong", body: "TasteProbe hit an unexpected problem. Try again.", recovery: "retry" };
   }
 }
+
+// ---- Multi-round exploration (S9.7) --------------------------------------------------------------------
+
+type Exploration = NonNullable<DiscoveryView["exploration"]>;
+
+/** Why "Keep exploring" is unavailable, from the backend's own reason. Never promises more than exists. */
+export function continueBlockedCopy(view: DiscoveryView): string | null {
+  const reason = view.exploration?.continueBlockedReason;
+  const picks = domainLabel(view.targetType, true);
+  switch (reason) {
+    case null:
+    case undefined:
+      return null;
+    case "candidates_exhausted":
+      return `You’ve seen or turned down every verified ${domainLabel(view.targetType)} found for ${view.seed.name}, and no new question is left. Try a different ${domainLabel(view.seed.entityType)} or destination.`;
+    case "budget_exhausted":
+      return `This exploration has used its question allowance. Your ${picks} stay here; start a new exploration to keep going.`;
+    case "accepted":
+      return "You already chose where to start.";
+    case "round_in_progress":
+      return "Finish this round first.";
+  }
+}
+
+/** Plain answer wording for the history; a skip stays a skip, never a dislike. */
+export function historyAnswer(entry: NonNullable<Exploration["answerHistory"]>[number]): { text: string; kind: "liked" | "passed" | "skipped" | "chose" } {
+  switch (entry.response) {
+    case "like":
+      return { text: "Yes", kind: "liked" };
+    case "dislike":
+      return { text: "Not for me", kind: "passed" };
+    case "prefer_a":
+      return { text: "Picked the first", kind: "chose" };
+    case "prefer_b":
+      return { text: "Picked the second", kind: "chose" };
+    case "both":
+      return { text: "Both", kind: "liked" };
+    case "neither":
+      return { text: "Neither", kind: "passed" };
+    case "unknown":
+      return { text: "Skipped (not counted)", kind: "skipped" };
+  }
+}
+
+/** "14:32" in the viewer's locale: the exploration closes at a fixed time (30 min after it began). */
+export const closesAt = (expiresAt: number) => new Date(expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 // ---- Discovery Path (finale) -------------------------------------------------------------------------
 

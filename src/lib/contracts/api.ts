@@ -290,6 +290,22 @@ export const ExplorationStateSchema = z.object({
     geminiMax: z.number().int().positive(),
   }),
   expiresAt: z.number().int(),
+  /**
+   * S9.7 projection of the stored answers, oldest first, for the "what TasteProbe
+   * remembers" panel. Labels come from verified candidate data on the server; a skip
+   * stays `unknown` and is never a dislike. Optional so S9.6 responses still validate.
+   */
+  answerHistory: z
+    .array(
+      z.object({
+        round: z.number().int().positive(),
+        questionId: z.string(),
+        targetType: z.enum(["tag", "entity"]),
+        response: PreferenceResponseSchema,
+        label: z.string(),
+      }),
+    )
+    .optional(),
 });
 export type ExplorationState = z.infer<typeof ExplorationStateSchema>;
 

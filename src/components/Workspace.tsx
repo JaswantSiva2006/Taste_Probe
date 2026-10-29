@@ -2,7 +2,7 @@
 
 import { domainLabel, type DiscoveryView, type PreferenceResponse, type ProviderMode } from "@/lib/contracts";
 import { lookOf } from "@/lib/ui/domains";
-import { questionCredit, tasteNotes, updateNotice, type NameBook } from "@/lib/ui/presentation";
+import { historyAnswer, questionCredit, shortTitle, tasteNotes, updateNotice, type NameBook } from "@/lib/ui/presentation";
 import { DomainGlyph } from "./DomainGlyph";
 import { Check, Cross, Reel, Refresh } from "./Icons";
 import { Intertitle } from "./Intertitle";
@@ -31,11 +31,16 @@ export function TasteNotes({
   title?: string;
   empty?: string;
 }) {
-  const notes = tasteNotes(view, names);
+  // Picks set aside with "Not for me" are listed separately from answer-level preferences.
+  const setAside = new Set(view.exploration?.rejectedRecommendationIds ?? []);
+  const notes = tasteNotes(view, names).filter((n) => !(n.target === "entity" && n.kind === "passed" && setAside.has(n.id)));
+  const history = view.exploration?.answerHistory ?? [];
+  const rounds = view.exploration?.round ?? 1;
   return (
     <section className="tp-notes" aria-labelledby="tp-notes-title">
       <h2 className="tp-notes__title" id="tp-notes-title">
         {title}
+        {view.exploration && rounds > 1 ? <span className="tp-notes__span"> · across {rounds} rounds</span> : null}
       </h2>
       {notes.length ? (
         <ul className="tp-notes__list">
@@ -50,6 +55,39 @@ export function TasteNotes({
       ) : (
         <p className="tp-notes__empty">{empty}</p>
       )}
+      {setAside.size ? (
+        <div className="tp-notes__group">
+          <h3 className="tp-notes__sub">Not for me</h3>
+          <ul className="tp-notes__list">
+            {[...setAside].map((id) => (
+              <li key={id} className="tp-note tp-note--setaside">
+                <Cross size={14} />
+                <span className="tp-sr">Set aside: </span>
+                {shortTitle(names.entity(id))}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {history.length ? (
+        <details className="tp-history">
+          <summary>
+            Your answers so far ({history.length})
+          </summary>
+          <ol className="tp-history__list">
+            {history.map((h, i) => {
+              const a = historyAnswer(h);
+              return (
+                <li key={`${h.questionId}-${i}`} className={`tp-history__item tp-history__item--${a.kind}`}>
+                  <span className="tp-history__round">Round {h.round}</span>
+                  <span className="tp-history__label">{h.label}</span>
+                  <span className="tp-history__answer">{a.text}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </details>
+      ) : null}
     </section>
   );
 }
@@ -94,7 +132,12 @@ export function Workspace({
           </span>
         </div>
         <div className="tp-strip__progress">
-          <Reels done={view.questionCount} total={view.maxQuestions} label={`Question ${view.questionCount} of ${view.maxQuestions}`} />
+          {view.exploration ? <span className="tp-round-pill">Round {view.exploration.round}</span> : null}
+          <Reels
+            done={view.questionCount}
+            total={view.maxQuestions}
+            label={`${view.exploration ? `Round ${view.exploration.round}, ` : ""}question ${view.questionCount} of up to ${view.maxQuestions}`}
+          />
           <span className="tp-strip__left">
             {remaining === 0 ? "Final question" : `Up to ${remaining} more ${remaining === 1 ? "question" : "questions"}`}
           </span>
@@ -158,10 +201,21 @@ export function Workspace({
           ) : (
             <p className="tp-shelf__intro">
               {view.recommendations.some((r) => r.candidate.evidence.source === "mock") ? "Synthetic sample" : "Qloo’s"} {plural} for fans of{" "}
-              {view.seed.name}, best match first. Your answers reorder them.
+              {view.seed.name}, best match first.{" "}
+              {view.exploration && view.exploration.round > 1
+                ? `Round ${view.exploration.round} starts from everything you’ve told us${
+                    view.exploration.rejectedRecommendationIds.length ? "; picks you set aside are gone" : ""
+                  }.`
+                : "Your answers reorder them."}
             </p>
           )}
-          <ResultShelf items={view.recommendations} names={names} hasPrevious={Boolean(view.lastAnswer)} label={`Recommended ${plural}, best match first`} />
+          <ResultShelf
+            items={view.recommendations}
+            names={names}
+            // Movement is shown only for an answer given in this round (S9.7).
+            hasPrevious={Boolean(view.lastAnswer) && (!view.exploration || (view.lastAnswer!.round ?? 1) === view.exploration.round)}
+            label={`Recommended ${plural}, best match first`}
+          />
         </section>
       </div>
     </div>

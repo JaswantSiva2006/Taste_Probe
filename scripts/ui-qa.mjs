@@ -187,10 +187,13 @@ for (const width of widths) {
   await shot("07-way-in");
   await audit(page, width, "way-in (explanation open)");
   await shot("07-way-in-fold", false);
-  const intent = page.getByRole("button", { name: /I’ll try this/ });
-  await intent.click();
-  assert.equal(await intent.getAttribute("aria-pressed"), "true");
-  assert.match(await page.textContent(".tp-start__note"), /Nothing is saved or sent/);
+  // S9.7: "I'll try this" now records the choice through /api/discovery/accept.
+  const leadTitle = (await page.locator(".tp-start .tp-card__title").textContent()).trim();
+  await page.getByRole("button", { name: `I’ll try this: ${leadTitle}` }).click();
+  await page.waitForSelector(".tp-programme--accepted");
+  assert.match(await page.textContent("#tp-programme-title"), new RegExp(`You’ll start with ${leadTitle.replace(/[()]/g, "\\$&")}`));
+  assert.match(await page.textContent(".tp-programme__sub"), /records only your intention/);
+  assert.equal(await page.getByRole("button", { name: "Keep exploring" }).count(), 0, "no continuation after accepting");
 
   await page.getByRole("button", { name: "Explore another world" }).click();
   await page.waitForSelector(".tp-world");
@@ -266,6 +269,9 @@ for (const width of [375, 1440]) {
     assert.equal(responses["discovery/start"].data.finishReason, "insufficient_question_evidence");
     assert.match(await page.textContent(".tp-programme__sub"), /none was asked/);
     assert.equal(await page.locator(".tp-path, .tp-programme__list").count(), 0, "no padded supporting cards");
+    // S9.7: one verified pick and no question left → continuing is truthfully unavailable.
+    assert.ok(await page.getByRole("button", { name: "Keep exploring" }).isDisabled(), "nothing new to explore after an early finish with one pick");
+    assert.match(await page.textContent(".tp-continue__body--blocked"), /seen or turned down every verified book/);
     await shot("14-early-finish");
     passed.push(`${width}: early finish`);
     await s.close();

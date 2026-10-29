@@ -10,7 +10,7 @@ import { Landing, type Capabilities } from "./Landing";
 import { Programme } from "./Programme";
 import { Workspace } from "./Workspace";
 
-type Pending = null | "search" | "start" | "answer" | "finish";
+type Pending = null | "search" | "start" | "answer" | "finish" | "reject" | "accept" | "continue";
 type ShownError = FriendlyError & { code: string; requestId?: string; retry?: () => void };
 
 /**
@@ -36,6 +36,9 @@ export function DiscoveryApp() {
   const [error, setError] = useState<ShownError | null>(null);
   const names = useRef(createNameBook()).current;
   const errorRef = useRef<HTMLDivElement>(null);
+  /** Synchronous in-flight guard: a second click can arrive before React re-renders the disabled buttons. */
+  const inFlight = useRef(false);
+  const lastAction = useRef<Pending>(null);
 
   const pairs = useMemo(() => (capabilities.status === "ready" ? capabilities.pairs : []), [capabilities]);
   // With a single destination there is nothing to choose; the anchor step opens directly.
@@ -66,8 +69,10 @@ export function DiscoveryApp() {
   // Move focus to the new primary heading whenever the exploration advances.
   useEffect(() => {
     if (!view) return;
-    const el = document.getElementById(view.status === "finished" ? "tp-programme-title" : "tp-question");
-    el?.focus({ preventScroll: false });
+    // After "Not for me", focus the replacement START HERE instead of jumping to the page title.
+    const afterReject = lastAction.current === "reject" && view.exploration?.status === "presenting";
+    const id = view.status !== "finished" ? "tp-question" : afterReject ? "tp-start-label" : "tp-programme-title";
+    (document.getElementById(id) ?? document.getElementById("tp-programme-title"))?.focus({ preventScroll: false });
   }, [view?.sessionId, view?.revision, view?.status, view]);
 
   useEffect(() => {
@@ -81,6 +86,9 @@ export function DiscoveryApp() {
   };
 
   async function run<T>(kind: Pending, fn: () => Promise<{ data: T; mode: ProviderMode }>, onOk: (data: T) => void, retry: () => void) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    lastAction.current = kind;
     setPending(kind);
     setError(null);
     try {
@@ -93,6 +101,7 @@ export function DiscoveryApp() {
       // Retry is always a user click; nothing here re-sends automatically (429 included).
       setError({ ...friendly, code, requestId: e instanceof ApiClientError ? e.requestId : undefined, retry: friendly.recovery === "retry" ? retry : undefined });
     } finally {
+      inFlight.current = false;
       setPending(null);
       setPendingResponse(null);
     }
@@ -174,6 +183,34 @@ export function DiscoveryApp() {
     if (!view) return;
     const { sessionToken } = view;
     const attempt = () => void run("finish", () => api.finish(sessionToken), accept, attempt);
+    attempt();
+  }
+
+  /**
+   * S9.7 exploration actions. Each uses the token of the view the user is looking at;
+   * on success the server's new view (and token) replaces it. They are never retried
+   * automatically: "Try again" is a user click with the same token, so if the first
+   * attempt did reach the server the store's revision check answers 409 instead of
+   * applying it twice.
+   */
+  function rejectPick(entityId: string) {
+    if (!view) return;
+    const { sessionToken } = view;
+    const attempt = () => void run("reject", () => api.reject(sessionToken, entityId), accept, attempt);
+    attempt();
+  }
+
+  function acceptPick(entityId: string) {
+    if (!view) return;
+    const { sessionToken } = view;
+    const attempt = () => void run("accept", () => api.accept(sessionToken, entityId), accept, attempt);
+    attempt();
+  }
+
+  function keepExploring() {
+    if (!view?.exploration?.canContinue) return;
+    const { sessionToken } = view;
+    const attempt = () => void run("continue", () => api.continue(sessionToken), accept, attempt);
     attempt();
   }
 
@@ -278,7 +315,19 @@ export function DiscoveryApp() {
             onFinish={finish}
           />
         ) : null}
-        {phase === "finale" && view ? <Programme view={view} names={names} onRestart={() => restart()} onNewAnchor={() => restart(true)} /> : null}
+        {phase === "finale" && view ? (
+          <Programme
+            view={view}
+            names={names}
+            pending={pending === "reject" || pending === "accept" || pending === "continue" ? pending : null}
+            busy={busy}
+            onReject={rejectPick}
+            onAccept={acceptPick}
+            onContinue={keepExploring}
+            onRestart={() => restart()}
+            onNewAnchor={() => restart(true)}
+          />
+        ) : null}
       </main>
 
       <footer className="tp-foot">
