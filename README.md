@@ -77,6 +77,8 @@ are git-ignored; never commit credentials.
 | `QLOO_MODE` | `mock` (default) or `live`. Live uses authenticated Qloo and never falls back to fixtures. |
 | `SESSION_SIGNING_SECRET` | ≥ 32 chars. Required for `live` and for production. In non-production mock mode it may be omitted: an ephemeral random secret is generated per process, so sessions don't survive a restart. |
 | `SESSION_TTL_SECONDS` | Session lifetime (default 1800). |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Shared session store. **Required in production**, where the app fails closed (`CONFIG_ERROR`) without them. Not needed for dev, mock or tests. |
+| `SESSION_STORE` | Optional `memory` or `redis`. Defaults to `memory` outside production. Production always uses `redis`, and `memory` is rejected there. |
 | `MAX_QUESTIONS` (≤ 3), `MAX_QLOO_CALLS_PER_SESSION`, `MAX_AGENT_TOOL_CALLS_PER_TURN`, `MAX_RECOMMENDATION_CANDIDATES`, `FINAL_RECOMMENDATION_COUNT` (≤ 5) | Budgets. |
 | `QLOO_API_KEY`, `QLOO_BASE_URL`, `QLOO_TIMEOUT_MS` | Live Qloo credentials, validated HTTPS endpoint, and timeout. Never required in mock mode. |
 | `LLM_*`, `GOOGLE_API_KEY` | Reserved for the later Gemini agent and unused by S3. |
@@ -96,7 +98,9 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `npm run dev:mock` | Dev server forced to `QLOO_MODE=mock` (via `cross-env`, works on Windows). |
 | `npm run lint` | ESLint (flat config, `eslint-config-next`). |
 | `npm run typecheck` | `next typegen` + `tsc --noEmit` (strict). |
-| `npm test` | Vitest unit + integration tests. |
+| `npm test` | Vitest unit + integration tests (offline; the live Redis test is skipped). |
+| `npm run test:session` | Session replay, concurrency, store-contract and fail-closed config suites only. |
+| `npm run test:redis` | Optional: runs the store contract against a real Upstash database (needs `UPSTASH_*`). |
 | `npm run build` | Production build. |
 | `npm run smoke:mock` | HTTP end-to-end smoke test (below). |
 | `npm run smoke:qloo` | Real Qloo-only HTTP smoke: Search, selection validation, Insights, and provenance (3 requests, 0 Gemini calls). |
@@ -179,7 +183,8 @@ The server builds the `PreferenceAnswer` itself (targets come from the active qu
 Main error codes: `VALIDATION_ERROR`/`INVALID_JSON` (400), `ENTITY_NOT_FOUND` (404),
 `ENTITY_TYPE_MISMATCH`/`ENTITY_NOT_RESOLVED` (400), `INVALID_QUESTION`/`INVALID_ANSWER` (400),
 `QUESTION_MISMATCH`/`SESSION_FINISHED`/`QUESTION_BUDGET_EXHAUSTED`/`SESSION_MODE_MISMATCH` (409),
-`INVALID_SESSION_TOKEN`/`SESSION_EXPIRED` (401), and sanitized `QLOO_*` upstream errors in live mode.
+`INVALID_SESSION_TOKEN`/`SESSION_EXPIRED` (401), `SESSION_REVISION_CONFLICT` (409, stale or concurrent
+request), `SESSION_STORE_UNAVAILABLE` (503), and sanitized `QLOO_*` upstream errors in live mode.
 
 ## Mock-mode limitations
 
@@ -192,14 +197,35 @@ Main error codes: `VALIDATION_ERROR`/`INVALID_JSON` (400), `ENTITY_NOT_FOUND` (4
 - Only tag like/dislike/skip questions are generated; the contracts already allow pair (`prefer_a`/`prefer_b`/
   `both`/`neither`) and entity questions.
 
-### Session limitations (for S4)
+## Sessions (S4: server-authoritative, replay-safe)
 
-Session state is a stateless HMAC-SHA256 token carried by the client. It gives integrity and expiry but
-**no replay protection**: an older, still-valid token can be resubmitted (for example to answer the same
-question twice and fork the session) until it expires. `revision` is recorded but not enforced against a
-server store. Cross-request concurrency, idempotency keys and a server-side revision store belong to S4.
-The token payload is signed, not encrypted (it holds no secrets or personal data). With no
-`SESSION_SIGNING_SECRET` in mock dev, the ephemeral secret is per process.
+- **The store is the source of truth.** The full session state lives in a `SessionStore`
+  (`src/lib/session/`), keyed `tasteprobe:session:<uuid>` with a TTL equal to the session expiry. The
+  HMAC-SHA256 token (`SESSION_SIGNING_SECRET`, timing-safe compare) now only authenticates
+  `{sid, rev, exp}`. Tampering with any field gives `INVALID_SESSION_TOKEN`.
+- **Every transition is checked against the store revision.** A token whose `rev` is not the stored
+  revision is rejected with `409 SESSION_REVISION_CONFLICT` before any work, so replayed tokens cannot apply
+  answers, finish or reopen sessions, reset usage counters, or trigger Qloo calls.
+- **Atomic compare-and-swap.** Redis runs one Lua `EVAL` per write that checks `rev` (and the lease owner)
+  and writes in the same step; there is never a separate GET and SET. The memory store does the same within
+  one Node.js process.
+- **Answer = lease, then commit.** An answer first takes a short lease (60 s, via CAS) on the current
+  revision, so a concurrent request for that revision gets 409 before it reaches the agent or Qloo. The
+  answer then commits as revision+1. If the turn fails, the lease is released with the revision unchanged,
+  but Qloo usage consumed so far is kept. A failed upstream call is charged at its attempt cap, so retries
+  cannot create untracked budget. Finish is a single lock-free CAS. Repeating finish with the current
+  token is read-only.
+- **Lost responses.** If the client retries after a successful answer whose response was lost, the retry
+  gets 409, never a double-applied answer. The client must start a new discovery: there is no
+  idempotency-key replay of the original response.
+- **Stores.** Memory is the default outside production (dev, mock, tests) and is not shared across instances.
+  Production (`NODE_ENV=production`) requires Upstash Redis and fails closed: missing credentials →
+  `CONFIG_ERROR`, store errors → `503 SESSION_STORE_UNAVAILABLE`. It never falls back to memory.
+- **Verification.** The Redis adapter's Lua scripts are executed offline in a Lua VM (`fengari`,
+  `tests/support/lua-redis.ts`). That verifies script logic, not Upstash network behaviour. `npm run test:redis`
+  runs the same contract against a real database when `UPSTASH_*` is set.
+- The token is signed, not encrypted (it holds no personal data). With no `SESSION_SIGNING_SECRET` in mock
+  dev, the ephemeral secret is per process.
 
 ## Future integration boundaries
 
@@ -209,5 +235,5 @@ The token payload is signed, not encrypted (it holds no secrets or personal data
 | Gemini agent | `createDiscoveryDeps` in `src/lib/discovery/deps.ts` | `DiscoveryAgent.decide` → `AgentDecision`, still passed through `validateAgentDecision` |
 | Question optimizer (S5) | `QuestionSelector` in `src/lib/discovery/questions.ts` | ordered `Question[]` |
 | Scoring | `rankCandidates` in `src/lib/discovery/ranking.ts` | `RankedRecommendation[]` |
-| Session hardening (S4) | `src/lib/session/*` | `encodeSessionState` / `decodeSessionState`, canonical `TasteSession` fields |
+| Session store | `getSessionStore` in `src/lib/session/index.ts` | `SessionStore` (create / read / compareAndSwap / expire), canonical `TasteSession` fields |
 | UI | `src/components/*` | HTTP API above |

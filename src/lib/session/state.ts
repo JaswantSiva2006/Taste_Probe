@@ -13,10 +13,7 @@ import {
 import { AppError } from "@/lib/validation/errors";
 import { signToken, verifyToken } from "./token";
 
-/**
- * G2 session service. The full signed state travels with the client so any
- * server instance can continue the session; integrity comes from the HMAC.
- */
+/** Full session state. Authoritative copy lives in the SessionStore, never in the token. */
 export const SessionStateSchema = z.object({
   session: TasteSessionSchema,
   seed: EntitySummarySchema,
@@ -40,6 +37,7 @@ export function createSession(input: {
 }): TasteSession {
   return {
     version: 1,
+    // randomUUID uses a CSPRNG: 122 random bits, unpredictable.
     sessionId: randomUUID(),
     revision: 0,
     anchorIds: input.anchorIds,
@@ -63,26 +61,25 @@ export function createSession(input: {
   };
 }
 
-export function encodeSessionState(state: SessionState, settings: SessionSettings): string {
-  return signToken(SessionStateSchema.parse(state), settings.signingSecret);
+/**
+ * What a token authenticates: which session, which revision the client last
+ * saw, and when it expires. It carries no mutable session state.
+ */
+export const SessionClaimsSchema = z.object({
+  v: z.literal(2),
+  sid: z.string().min(1),
+  rev: z.number().int().nonnegative(),
+  exp: z.number().int(),
+});
+export type SessionClaims = z.infer<typeof SessionClaimsSchema>;
+
+export function issueSessionToken(claims: Omit<SessionClaims, "v">, secret: string): string {
+  return signToken(SessionClaimsSchema.parse({ v: 2, ...claims }), secret);
 }
 
-export function decodeSessionState(
-  token: string,
-  settings: SessionSettings,
-  expectedMode: ProviderMode,
-  now: number,
-): SessionState {
-  const parsed = SessionStateSchema.safeParse(verifyToken(token, settings.signingSecret));
-  if (!parsed.success) {
-    throw new AppError("INVALID_SESSION_TOKEN", 401, "Session token is invalid");
-  }
-  const state = parsed.data;
-  if (now >= state.session.expiresAt) {
-    throw new AppError("SESSION_EXPIRED", 401, "Session has expired; start a new discovery");
-  }
-  if (state.session.mode !== expectedMode) {
-    throw new AppError("SESSION_MODE_MISMATCH", 409, "Session was created in a different provider mode");
-  }
-  return state;
+export function verifySessionToken(token: string, secret: string, now: number): SessionClaims {
+  const parsed = SessionClaimsSchema.safeParse(verifyToken(token, secret));
+  if (!parsed.success) throw new AppError("INVALID_SESSION_TOKEN", 401, "Session token is invalid");
+  if (now >= parsed.data.exp) throw new AppError("SESSION_EXPIRED", 401, "Session has expired; start a new discovery");
+  return parsed.data;
 }

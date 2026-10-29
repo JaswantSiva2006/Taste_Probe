@@ -159,14 +159,32 @@ describe("POST /api/discovery/answer", () => {
 
   it("rejects tampered tokens", async () => {
     const v = await start();
+    const other = await start();
     const [ver, body, sig] = v.sessionToken.split(".") as [string, string, string];
     const payload = JSON.parse(Buffer.from(body, "base64url").toString());
-    payload.session.questionCount = 0;
-    payload.session.maxQuestions = 3;
-    payload.session.positiveTagIds = ["mock:tag:romance"];
-    const forged = `${ver}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.${sig}`;
-    await fail(await answer({ ...v, sessionToken: forged }), 401, "INVALID_SESSION_TOKEN");
+    // Tokens now carry only {sid, rev, exp}; forging any of them must fail.
+    for (const change of [{ rev: payload.rev + 1 }, { sid: other.sessionId }, { exp: payload.exp + 86_400_000 }]) {
+      const forged = `${ver}.${Buffer.from(JSON.stringify({ ...payload, ...change })).toString("base64url")}.${sig}`;
+      await fail(await answer({ ...v, sessionToken: forged }), 401, "INVALID_SESSION_TOKEN");
+    }
     await fail(await answer({ ...v, sessionToken: "garbage" }), 401, "INVALID_SESSION_TOKEN");
+  });
+
+  it("rejects replay of an older token over HTTP and keeps the newer state", async () => {
+    const v0 = await start();
+    const v1 = await ok(await answer(v0, "like"));
+    const replay = await fail(await answer(v0, "dislike"), 409, "SESSION_REVISION_CONFLICT");
+    expect(replay.error.message).not.toMatch(/secret|redis|stack/i);
+    const v2 = await ok(await answer(v1, "unknown"));
+    expect(v2.revision).toBe(2);
+    expect(v2.preferences.positiveTagIds).toEqual(v1.preferences.positiveTagIds);
+  });
+
+  it("lets only one of two simultaneous HTTP answers with the same token succeed", async () => {
+    const v0 = await start();
+    const res = await Promise.all([answer(v0, "like"), answer(v0, "dislike")]);
+    const statuses = res.map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
   });
 
   it("rejects tokens signed with a different secret", async () => {
@@ -216,6 +234,16 @@ describe("POST /api/discovery/finish", () => {
     await fail(await answer(done, "like", v0.currentQuestion!.questionId), 409, "SESSION_FINISHED");
     const again = await ok(await finishRoute(post("/discovery/finish", { sessionToken: done.sessionToken })));
     expect(again.recommendations.map((r) => r.candidate.entityId)).toEqual(done.recommendations.map((r) => r.candidate.entityId));
+    // The pre-finish token cannot reopen the session.
+    await fail(await answer(v0, "like"), 409, "SESSION_REVISION_CONFLICT");
+    await fail(await finishRoute(post("/discovery/finish", { sessionToken: v0.sessionToken })), 409, "SESSION_REVISION_CONFLICT");
+  });
+
+  it("fails closed in production without Redis credentials", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const json = await fail(await startRoute(post("/discovery/start", START_BODY)), 500, "CONFIG_ERROR");
+    expect(json.error.message).toContain("UPSTASH_REDIS_REST_URL");
+    await fail(await healthRoute(), 500, "CONFIG_ERROR");
   });
 
   it("keeps preferences learned before finishing", async () => {

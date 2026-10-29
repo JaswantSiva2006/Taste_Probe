@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "@/lib/config/env";
-import { createSession, decodeSessionState, encodeSessionState, type SessionState } from "@/lib/session/state";
+import { createMemorySessionStore } from "@/lib/session/memory-store";
+import { createSessionService } from "@/lib/session/service";
+import { createSession, issueSessionToken, verifySessionToken, type SessionState } from "@/lib/session/state";
 import { signToken, verifyToken } from "@/lib/session/token";
 import { newTestSecret } from "../helpers";
 
@@ -64,37 +66,51 @@ describe("session state", () => {
     expect(a.expiresAt - a.createdAt).toBe(60_000);
   });
 
-  it("restores a signed session", () => {
-    const s = state();
-    const token = encodeSessionState(s, settings);
-    expect(decodeSessionState(token, settings, "mock", s.session.createdAt + 1).session).toEqual(s.session);
+  // Sessions are stored server-side; the clock is injected and set to the session's creation time.
+  const service = (s: SessionState, mode: "mock" | "live" = "mock", at = s.session.createdAt + 1, store = createMemorySessionStore()) =>
+    createSessionService({ store, settings, mode, now: () => at });
+
+  it("restores a stored session from its token", async () => {
+    const s = state(Date.now());
+    const store = createMemorySessionStore();
+    const token = await service(s, "mock", Date.now(), store).create(s);
+    const loaded = await service(s, "mock", Date.now(), store).load(token);
+    expect(loaded.state.session).toEqual(s.session);
+    expect(loaded.revision).toBe(0);
   });
 
-  it("rejects expired sessions", () => {
-    const s = state();
-    const token = encodeSessionState(s, settings);
-    expect(() => decodeSessionState(token, settings, "mock", s.session.expiresAt)).toThrowError(
+  it("tokens carry only identity, revision and expiry", () => {
+    const token = issueSessionToken({ sid: "abc", rev: 2, exp: 5_000 }, settings.signingSecret);
+    const body = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString());
+    expect(Object.keys(body).sort()).toEqual(["exp", "rev", "sid", "v"]);
+    expect(verifySessionToken(token, settings.signingSecret, 4_999)).toMatchObject({ sid: "abc", rev: 2 });
+  });
+
+  it("rejects expired tokens", () => {
+    const token = issueSessionToken({ sid: "abc", rev: 0, exp: 5_000 }, settings.signingSecret);
+    expect(() => verifySessionToken(token, settings.signingSecret, 5_000)).toThrowError(
       expect.objectContaining({ code: "SESSION_EXPIRED" }),
     );
   });
 
-  it("rejects a mock session presented to a live server", () => {
-    const s = state();
-    expect(() => decodeSessionState(encodeSessionState(s, settings), settings, "live", s.session.createdAt)).toThrowError(
-      expect.objectContaining({ code: "SESSION_MODE_MISMATCH" }),
-    );
+  it("rejects a mock session presented to a live server", async () => {
+    const s = state(Date.now());
+    const store = createMemorySessionStore();
+    const token = await service(s, "mock", Date.now(), store).create(s);
+    await expect(service(s, "live", Date.now(), store).load(token)).rejects.toMatchObject({ code: "SESSION_MODE_MISMATCH" });
   });
 
-  it("rejects a validly signed payload that is not a session", () => {
+  it("rejects a validly signed payload that is not a session token", async () => {
     const token = signToken({ hello: "world" }, settings.signingSecret);
-    expect(() => decodeSessionState(token, settings, "mock", 0)).toThrowError(
-      expect.objectContaining({ code: "INVALID_SESSION_TOKEN" }),
-    );
+    await expect(service(state()).load(token)).rejects.toMatchObject({ code: "INVALID_SESSION_TOKEN" });
+    // An S1-style token that embedded the whole state is no longer accepted.
+    const legacy = signToken(state(), settings.signingSecret);
+    await expect(service(state()).load(legacy)).rejects.toMatchObject({ code: "INVALID_SESSION_TOKEN" });
   });
 
-  it("refuses to encode a session that exceeds the question limit", () => {
+  it("refuses to store a session that exceeds the question limit", async () => {
     const s = state();
-    expect(() => encodeSessionState({ ...s, session: { ...s.session, maxQuestions: 4 } }, settings)).toThrow();
+    await expect(service(s).create({ ...s, session: { ...s.session, maxQuestions: 4 } })).rejects.toThrow();
   });
 });
 
@@ -124,6 +140,47 @@ describe("configuration", () => {
     const config = loadConfig({ NODE_ENV: "development", QLOO_MODE: "mock" });
     expect(config.session.secretIsEphemeral).toBe(true);
     expect(config.session.signingSecret.length).toBeGreaterThanOrEqual(32);
+  });
+
+  describe("session store selection (fail closed in production)", () => {
+    const prod = { NODE_ENV: "production", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: newTestSecret() };
+    const redisEnv = { UPSTASH_REDIS_REST_URL: "https://example-redis.upstash.io", UPSTASH_REDIS_REST_TOKEN: "test-token-not-real" };
+
+    it("uses memory outside production by default", () => {
+      expect(loadConfig({ NODE_ENV: "test", SESSION_SIGNING_SECRET: newTestSecret() }).sessionStore).toEqual({ kind: "memory" });
+      expect(loadConfig({ NODE_ENV: "development", QLOO_MODE: "mock" }).sessionStore.kind).toBe("memory");
+    });
+
+    it("refuses production without Redis credentials, naming only the variables", () => {
+      for (const env of [prod, { ...prod, UPSTASH_REDIS_REST_URL: redisEnv.UPSTASH_REDIS_REST_URL }, { ...prod, UPSTASH_REDIS_REST_TOKEN: "x".repeat(20) }]) {
+        expect(() => loadConfig(env)).toThrowError(
+          expect.objectContaining({ code: "CONFIG_ERROR", message: expect.stringContaining("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN") }),
+        );
+      }
+      try {
+        loadConfig({ ...prod, UPSTASH_REDIS_REST_TOKEN: "secret-token-value" });
+      } catch (e) {
+        expect((e as Error).message).not.toContain("secret-token-value");
+      }
+    });
+
+    it("never allows the memory store in production, even when requested", () => {
+      expect(() => loadConfig({ ...prod, ...redisEnv, SESSION_STORE: "memory" })).toThrowError(
+        expect.objectContaining({ code: "CONFIG_ERROR", message: expect.stringContaining("not allowed in production") }),
+      );
+    });
+
+    it("selects Redis in production when configured, and requires HTTPS", () => {
+      expect(loadConfig({ ...prod, ...redisEnv }).sessionStore).toEqual({ kind: "redis", url: redisEnv.UPSTASH_REDIS_REST_URL, token: redisEnv.UPSTASH_REDIS_REST_TOKEN });
+      expect(() => loadConfig({ ...prod, ...redisEnv, UPSTASH_REDIS_REST_URL: "http://plain.example" })).toThrowError(/HTTPS/);
+    });
+
+    it("lets development opt into Redis but still requires credentials", () => {
+      expect(() => loadConfig({ NODE_ENV: "development", QLOO_MODE: "mock", SESSION_STORE: "redis" })).toThrowError(
+        expect.objectContaining({ code: "CONFIG_ERROR" }),
+      );
+      expect(loadConfig({ NODE_ENV: "development", QLOO_MODE: "mock", SESSION_STORE: "redis", ...redisEnv }).sessionStore.kind).toBe("redis");
+    });
   });
 
   it("rejects short secrets, out-of-range limits and bad modes without echoing values", () => {

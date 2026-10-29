@@ -38,6 +38,9 @@ const EnvSchema = z.object({
 
   SESSION_SIGNING_SECRET: optionalString,
   SESSION_TTL_SECONDS: int(1800, 60, 86_400),
+  SESSION_STORE: z.enum(["memory", "redis"]).optional(),
+  UPSTASH_REDIS_REST_URL: optionalString,
+  UPSTASH_REDIS_REST_TOKEN: optionalString,
 
   MAX_QUESTIONS: int(MAX_QUESTIONS_LIMIT, 1, MAX_QUESTIONS_LIMIT),
   MAX_QLOO_CALLS_PER_SESSION: int(6, 1, 50),
@@ -60,6 +63,7 @@ export type AppConfig = {
   qloo: { apiKey?: string; baseUrl?: string; timeoutMs: number };
   llm: { provider: string; model?: string; apiKey?: string; temperature: number; timeoutMs: number };
   session: { signingSecret: string; ttlSeconds: number; secretIsEphemeral: boolean };
+  sessionStore: { kind: "memory" } | { kind: "redis"; url: string; token: string };
   limits: {
     maxQuestions: number;
     maxQlooCallsPerSession: number;
@@ -101,6 +105,36 @@ export function readProviderMode(env: EnvSource = process.env): ProviderMode {
   return env.QLOO_MODE === "live" ? "live" : "mock";
 }
 
+/**
+ * Production always uses the shared Redis store and fails closed without it;
+ * there is no silent fallback to process memory.
+ */
+function resolveSessionStore(e: z.infer<typeof EnvSchema>): AppConfig["sessionStore"] {
+  const production = e.NODE_ENV === "production";
+  if (production && e.SESSION_STORE === "memory") {
+    throw new AppError("CONFIG_ERROR", 500, "The in-memory session store is not allowed in production");
+  }
+  const kind = production ? "redis" : (e.SESSION_STORE ?? "memory");
+  if (kind === "memory") return { kind };
+  const url = e.UPSTASH_REDIS_REST_URL;
+  const token = e.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    throw new AppError(
+      "CONFIG_ERROR",
+      500,
+      "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required for the Redis session store",
+    );
+  }
+  let protocol = "";
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    // reported below
+  }
+  if (protocol !== "https:") throw new AppError("CONFIG_ERROR", 500, "UPSTASH_REDIS_REST_URL must be an HTTPS URL");
+  return { kind, url, token };
+}
+
 export function loadConfig(env: EnvSource = process.env): AppConfig {
   const parsed = EnvSchema.safeParse(env);
   if (!parsed.success) {
@@ -131,6 +165,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
   return {
     nodeEnv: e.NODE_ENV,
     mode: e.QLOO_MODE,
+    sessionStore: resolveSessionStore(e),
     qloo: { apiKey: e.QLOO_API_KEY, baseUrl: e.QLOO_BASE_URL, timeoutMs: e.QLOO_TIMEOUT_MS },
     llm: {
       provider: e.LLM_PROVIDER,

@@ -14,11 +14,14 @@
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
+    "test:session": "vitest run tests/unit/session-security.test.ts tests/unit/session-store.test.ts tests/unit/session-config.test.ts",
+    "test:redis": "cross-env RUN_REDIS_LIVE_TEST=1 vitest run tests/live/redis-store.live.test.ts",
     "smoke:mock": "node scripts/smoke-mock.mjs",
     "smoke:qloo": "node scripts/smoke-qloo.mjs",
     "probe:live": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/probe-live.mjs"
   },
   "dependencies": {
+    "@upstash/redis": "1.39.0",
     "next": "16.4.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -33,6 +36,7 @@
     "cross-env": "10.1.0",
     "eslint": "9.39.5",
     "eslint-config-next": "16.4.3",
+    "fengari": "0.1.5",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "vitest": "5.0.5"

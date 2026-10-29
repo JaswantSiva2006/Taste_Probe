@@ -3,6 +3,7 @@ import { createDeterministicMockAgent } from "@/lib/agent/mock-agent";
 import { loadConfig, type AppConfig } from "@/lib/config/env";
 import type { DiscoveryDeps } from "@/lib/discovery/service";
 import { createMockQlooProvider } from "@/lib/qloo/mock-provider";
+import { createMemorySessionStore } from "@/lib/session/memory-store";
 import type { StartRequest } from "@/lib/contracts";
 
 /** Isolated, randomly generated test secret: never read from .env.local. */
@@ -22,6 +23,7 @@ export function testDeps(overrides: Partial<DiscoveryDeps> = {}): DiscoveryDeps 
     config: testConfig(),
     provider: createMockQlooProvider(),
     agent: createDeterministicMockAgent(),
+    store: createMemorySessionStore(),
     ...overrides,
   };
 }

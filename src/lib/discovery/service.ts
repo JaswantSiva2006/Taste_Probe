@@ -4,12 +4,9 @@ import type { DiscoveryAgent } from "@/lib/agent/types";
 import { validateAgentDecision } from "@/lib/agent/validate";
 import type { AppConfig } from "@/lib/config/env";
 import type { QlooProvider } from "@/lib/qloo/provider";
-import {
-  createSession,
-  decodeSessionState,
-  encodeSessionState,
-  type SessionState,
-} from "@/lib/session/state";
+import { createSessionService, type Lease, type SessionService } from "@/lib/session/service";
+import { createSession, type SessionState } from "@/lib/session/state";
+import type { SessionStore } from "@/lib/session/store";
 import { AppError } from "@/lib/validation/errors";
 import { normalizeEntity, normalizeRecommendations, normalizeSearchResults } from "./normalize";
 import { applyAnswer, buildAnswer } from "./preferences";
@@ -28,11 +25,32 @@ export type DiscoveryDeps = {
   config: AppConfig;
   provider: QlooProvider;
   agent: DiscoveryAgent;
+  /** Authoritative session state (memory in dev/tests, Redis in production). */
+  store: SessionStore;
   selectQuestions?: QuestionSelector;
   now?: () => number;
 };
 
 const MIN_CANDIDATES = 2;
+/** Matches the live provider's own cap; on failure the full cap is charged (fail closed). */
+const RETRIEVAL_ATTEMPT_CAP = 2;
+
+/** External usage incurred by one request, kept even when the request later fails. */
+type UsageLedger = { qlooCalls: number; toolCalls: number };
+
+const sessionsOf = (deps: DiscoveryDeps): SessionService =>
+  createSessionService({ store: deps.store, settings: deps.config.session, mode: deps.config.mode, now: deps.now });
+
+function withUsage(state: SessionState, ledger: UsageLedger): SessionState {
+  return {
+    ...state,
+    session: {
+      ...state.session,
+      qlooCallCount: state.session.qlooCallCount + ledger.qlooCalls,
+      agentToolCallCount: state.session.agentToolCallCount + ledger.toolCalls,
+    },
+  };
+}
 
 export async function searchEntities(deps: DiscoveryDeps, q: string, type?: EntitySummary["entityType"]) {
   return { results: normalizeSearchResults(await deps.provider.searchEntities(q, type)) };
@@ -70,6 +88,7 @@ async function resolveSeed(deps: DiscoveryDeps, input: StartRequest): Promise<En
 async function runAgent(
   deps: DiscoveryDeps,
   state: SessionState,
+  ledger: UsageLedger = { qlooCalls: 0, toolCalls: 0 },
 ): Promise<{ state: SessionState; decision: AgentDecision; question: Question | null }> {
   const { limits } = deps.config;
   const select = deps.selectQuestions ?? selectQuestionsByBalanceHeuristic;
@@ -112,24 +131,35 @@ async function runAgent(
       throw new AppError("QLOO_BUDGET_EXHAUSTED", 429, "Recommendation retrieval budget exhausted");
     }
     toolCalls += 1;
-    const result = await deps.provider.getRecommendations({
-      seedEntityIds: current.session.anchorIds,
-      targetType: current.session.targetType,
-      take: limits.maxRecommendationCandidates,
-      positiveEntityIds: current.session.positiveEntityIds,
-      positiveTagIds: current.session.positiveTagIds,
-      excludedEntityIds: current.session.rejectedEntityIds,
-      excludedTagIds: current.session.rejectedTagIds,
-      includeExplainability: deps.config.mode === "live",
-      maxAttempts: limits.maxQlooCallsPerSession - current.session.qlooCallCount,
-    });
+    const attemptCap = Math.min(RETRIEVAL_ATTEMPT_CAP, limits.maxQlooCallsPerSession - current.session.qlooCallCount);
+    ledger.toolCalls += 1;
+    let result;
+    try {
+      result = await deps.provider.getRecommendations({
+        seedEntityIds: current.session.anchorIds,
+        targetType: current.session.targetType,
+        take: limits.maxRecommendationCandidates,
+        positiveEntityIds: current.session.positiveEntityIds,
+        positiveTagIds: current.session.positiveTagIds,
+        excludedEntityIds: current.session.rejectedEntityIds,
+        excludedTagIds: current.session.rejectedTagIds,
+        includeExplainability: deps.config.mode === "live",
+        maxAttempts: attemptCap,
+      });
+    } catch (error) {
+      // The number of upstream attempts is unknown on failure: charge the cap.
+      ledger.qlooCalls += attemptCap;
+      throw error;
+    }
+    const used = Math.max(1, result.requestCount);
+    ledger.qlooCalls += used;
     const candidates = normalizeRecommendations(result, current.session.anchorIds, limits.maxRecommendationCandidates);
     current = {
       ...current,
       candidates,
       session: {
         ...current.session,
-        qlooCallCount: current.session.qlooCallCount + Math.max(1, result.requestCount),
+        qlooCallCount: current.session.qlooCallCount + used,
         agentToolCallCount: current.session.agentToolCallCount + 1,
       },
     };
@@ -169,11 +199,18 @@ function finishState(state: SessionState, reason: FinishReason): SessionState {
   };
 }
 
+/** Records the ranked order the user will see, so the next transition can report movement. */
+function withOrder(state: SessionState, previousOrder: string[] | null): SessionState {
+  return { ...state, order: orderOf(rankCandidates(state.candidates, state.session, previousOrder)) };
+}
+
 function toView(
   deps: DiscoveryDeps,
   state: SessionState,
   previousOrder: string[] | null,
   decision: AgentDecision,
+  sessionToken: string,
+  revision: number,
 ): DiscoveryView {
   const { session } = state;
   const ranked = rankCandidates(state.candidates, session, previousOrder);
@@ -184,9 +221,9 @@ function toView(
       ) ?? null)
     : null;
   return {
-    sessionToken: encodeSessionState({ ...state, order: orderOf(ranked) }, deps.config.session),
+    sessionToken,
     sessionId: session.sessionId,
-    revision: session.revision,
+    revision,
     status: finished ? "finished" : "asking",
     finishReason: state.finishReason,
     seed: state.seed,
@@ -227,11 +264,23 @@ export async function startDiscovery(deps: DiscoveryDeps, input: StartRequest): 
   });
   const initial: SessionState = { session, seed, candidates: [], order: [], finishReason: null };
   const { state, decision, question } = await runAgent(deps, initial);
-  return toView(deps, applyOutcome(state, question, decision), null, decision);
+  const final = withOrder(applyOutcome(state, question, decision), null);
+  const token = await sessionsOf(deps).create(final);
+  return toView(deps, final, null, decision, token, 0);
 }
 
+/**
+ * Answer transition. Order matters for replay safety:
+ * 1. load: token revision must equal the store's current revision (stale -> 409, no work done);
+ * 2. validate the answer against the authoritative state (invalid -> 4xx, no side effects);
+ * 3. acquire a lease by CAS so a concurrent request for the same revision gets 409
+ *    before it can reach the agent or Qloo;
+ * 4. commit revision+1 by CAS; on any failure release the lease, keeping consumed usage.
+ */
 export async function answerDiscovery(deps: DiscoveryDeps, input: AnswerRequest): Promise<DiscoveryView> {
-  const state = decodeSessionState(input.sessionToken, deps.config.session, deps.config.mode, nowOf(deps));
+  const sessions = sessionsOf(deps);
+  const loaded = await sessions.load(input.sessionToken);
+  const { state } = loaded;
   const { session } = state;
 
   if (session.status === "finished" || !session.currentQuestionId) {
@@ -252,17 +301,38 @@ export async function answerDiscovery(deps: DiscoveryDeps, input: AnswerRequest)
   if (!question) throw new AppError("INVALID_QUESTION", 400, "Unknown question ID");
 
   const answer = buildAnswer(question, input.response, nowOf(deps));
-  const updated: SessionState = {
-    ...state,
-    session: { ...applyAnswer(session, answer), currentQuestionId: undefined, revision: session.revision + 1 },
-  };
-  const previousOrder = state.order;
-  const { state: next, decision, question: nextQuestion } = await runAgent(deps, updated);
-  return toView(deps, applyOutcome(next, nextQuestion, decision), previousOrder, decision);
+
+  const lease: Lease = await sessions.acquire(loaded);
+  const ledger: UsageLedger = { qlooCalls: 0, toolCalls: 0 };
+  let outcome: { next: SessionState; decision: AgentDecision };
+  try {
+    const updated: SessionState = {
+      ...state,
+      session: { ...applyAnswer(session, answer), currentQuestionId: undefined },
+    };
+    const { state: next, decision, question: nextQuestion } = await runAgent(deps, updated, ledger);
+    outcome = { next: withOrder(applyOutcome(next, nextQuestion, decision), state.order), decision };
+  } catch (error) {
+    await releaseQuietly(sessions, lease, withUsage(state, ledger));
+    throw error;
+  }
+  const token = await sessions.commit(lease, outcome.next);
+  return toView(deps, outcome.next, state.order, outcome.decision, token, lease.revision + 1);
+}
+
+/** Frees the lease after a failed turn; the original error is what the client sees. */
+async function releaseQuietly(sessions: SessionService, lease: Lease, state: SessionState): Promise<void> {
+  try {
+    await sessions.release(lease, state);
+  } catch {
+    // Lease expires after LEASE_TTL_MS; usage recorded so far stays in the store.
+  }
 }
 
 export async function finishDiscovery(deps: DiscoveryDeps, sessionToken: string): Promise<DiscoveryView> {
-  const state = decodeSessionState(sessionToken, deps.config.session, deps.config.mode, nowOf(deps));
+  const sessions = sessionsOf(deps);
+  const loaded = await sessions.load(sessionToken);
+  const { state } = loaded;
   const decision: AgentDecision = {
     action: "finish",
     reasonCode:
@@ -270,12 +340,11 @@ export async function finishDiscovery(deps: DiscoveryDeps, sessionToken: string)
     done: true,
   };
   if (state.session.status === "finished") {
-    // Idempotent: repeating finish returns the same final shortlist.
-    return toView(deps, state, state.order, decision);
+    // Idempotent for the current token only: no write, same final shortlist.
+    return toView(deps, state, state.order, decision, sessions.tokenFor(loaded), loaded.revision);
   }
-  const finished = finishState(
-    { ...state, session: { ...state.session, revision: state.session.revision + 1 } },
-    "user_finished",
-  );
-  return toView(deps, finished, state.order, decision);
+  // Lock-free CAS: fails with 409 if an answer holds the lease or already advanced the revision.
+  const finished = withOrder(finishState(state, "user_finished"), state.order);
+  const token = await sessions.commit(loaded, finished);
+  return toView(deps, finished, state.order, decision, token, loaded.revision + 1);
 }
