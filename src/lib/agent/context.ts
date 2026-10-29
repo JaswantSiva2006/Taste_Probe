@@ -52,6 +52,11 @@ export type AgentDecisionContext = {
   positive: { tagIds: string[]; entityIds: string[] };
   negative: { tagIds: string[]; entityIds: string[] };
   permissions: AgentPermissions;
+  /**
+   * S9.6, rounds >= 2 only: compact, verified multi-round summary. Rejected
+   * recommendations are entity-level feedback, not tag preferences.
+   */
+  exploration?: { round: number; totalQuestionsAsked: number; rejectedRecommendationIds: string[] };
 };
 
 /** Collapses whitespace/control characters and bounds length. External text stays data. */
@@ -130,6 +135,15 @@ export function buildAgentContext(input: BuildContextInput): AgentDecisionContex
       enrich: (input.allowEnrichment ?? true) && qlooCallsRemaining > 0 && candidates.length > 0,
       finish: input.allowEarlyFinish ?? true,
     },
+    ...((session.round ?? 1) > 1
+      ? {
+          exploration: {
+            round: session.round!,
+            totalQuestionsAsked: session.askedQuestionIds.length,
+            rejectedRecommendationIds: (session.recommendationFeedback ?? []).filter((f) => f.action === "reject" && f.entityId).map((f) => f.entityId!),
+          },
+        }
+      : {}),
   };
 }
 

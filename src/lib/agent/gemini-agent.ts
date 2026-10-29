@@ -58,6 +58,8 @@ export function buildGeminiRequest(context: AgentDecisionContext, allowed: ToolN
     confirmedPositive: context.positive,
     confirmedNegative: context.negative,
     approvedQuestions: context.questions.map((q) => ({ questionId: q.questionId, questionType: q.questionType, scores: q.components })),
+    // S9.6 (round >= 2): the user asked for another round after seeing results; history above is cumulative.
+    ...(context.exploration ? { exploration: context.exploration } : {}),
   };
   const catalog = {
     approvedQuestionWording: context.questions.map((q) => ({ questionId: q.questionId, text: q.text, targetIds: q.targetIds })),

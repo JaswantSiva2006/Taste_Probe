@@ -4,7 +4,8 @@ import { Redis } from "@upstash/redis";
 import type { AppConfig } from "@/lib/config/env";
 import { AppError } from "@/lib/validation/errors";
 
-export type RateLimitAction = "search" | "start" | "answer";
+/** S9.6: "continue" opens a new paid round, so it is limited like "start" (own bucket, same max). */
+export type RateLimitAction = "search" | "start" | "answer" | "continue";
 export type RateLimitResult = { count: number; resetAt: number };
 export interface RateLimitStore {
   increment(key: string, windowMs: number, now: number): Promise<RateLimitResult>;
@@ -84,7 +85,8 @@ export async function enforceRateLimit(
   options: { store?: RateLimitStore; now?: number } = {},
 ): Promise<void> {
   if (!config.rateLimit.enabled) return;
-  const max = action === "search" ? config.rateLimit.searchMax : action === "start" ? config.rateLimit.startMax : config.rateLimit.answerMax;
+  const max =
+    action === "search" ? config.rateLimit.searchMax : action === "start" || action === "continue" ? config.rateLimit.startMax : config.rateLimit.answerMax;
   const now = options.now ?? Date.now();
   const windowMs = config.rateLimit.windowSeconds * 1_000;
   const key = `tp:rl:${action}:${sourceIdentity(request, config)}`;

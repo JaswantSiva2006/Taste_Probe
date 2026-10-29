@@ -74,17 +74,37 @@ export function buildQuestionCandidates(candidates: RecommendationCandidate[], t
   return tags.length ? tags : entityQuestions(candidates, targetType);
 }
 
-/** Questions not yet asked and whose targets have no confirmed preference. */
-export function availableQuestions(questions: Question[], session: TasteSession): Question[] {
+const normalizeLabel = (label: string) => label.trim().toLowerCase().replace(/\s+/g, " ");
+
+/**
+ * S9.6 semantic dimension of a question, stable across rounds and wording:
+ * a tag question is its verified tag label (so "Fantasy" under two tag types is
+ * one dimension); an entity comparison is its unordered pair.
+ */
+export function questionDimension(question: Question, candidates: RecommendationCandidate[]): string {
+  if (question.targetType === "entity") return `entity:${[...question.targetIds].sort().join("|")}`;
+  const id = question.targetIds[0] ?? "";
+  const tag = candidates.flatMap((c) => c.tags).find((t) => t.id === id);
+  return tag ? `tag:${normalizeLabel(tag.name)}` : `tag-id:${id}`;
+}
+
+/**
+ * Questions not yet asked (by ID or, across rounds, by semantic dimension) and
+ * whose targets have no confirmed preference. `candidates` supplies tag labels
+ * for dimension matching; without it only IDs and entity pairs are compared.
+ */
+export function availableQuestions(questions: Question[], session: TasteSession, candidates: RecommendationCandidate[] = []): Question[] {
   const decided = new Set([
     ...session.positiveTagIds,
     ...session.rejectedTagIds,
     ...session.positiveEntityIds,
     ...session.rejectedEntityIds,
   ]);
+  const askedDimensions = new Set(session.askedDimensions ?? []);
   return questions.filter(
     (question) =>
       !session.askedQuestionIds.includes(question.questionId) &&
+      !askedDimensions.has(questionDimension(question, candidates)) &&
       (question.targetType === "entity"
         ? !question.targetIds.some((id) => decided.has(id))
         : !question.targetIds.every((id) => decided.has(id))),

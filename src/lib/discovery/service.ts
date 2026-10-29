@@ -2,10 +2,14 @@ import "server-only";
 import type {
   AgentDecision,
   AnswerRequest,
+  ContinueRequest,
   DiscoveryView,
   EntitySummary,
+  ExplorationState,
   FinishReason,
   Question,
+  RankedRecommendation,
+  RecommendationFeedbackRequest,
   RecommendationUpdate,
   StartRequest,
   TurnTrace,
@@ -40,6 +44,7 @@ import { applyAnswer, buildAnswer } from "./preferences";
 import {
   availableQuestions,
   buildQuestionCandidates,
+  questionDimension,
   selectQuestionsByBalanceHeuristic,
   type QuestionSelector,
 } from "./questions";
@@ -173,7 +178,7 @@ async function runAgent(
   for (let toolCalls = 0; ; ) {
     const ranked = rankCandidates(current.candidates, current.session);
     const questionCandidates = deps.config.features.adaptiveQuestioning
-      ? availableQuestions(buildQuestionCandidates(current.candidates, current.session.targetType), current.session)
+      ? availableQuestions(buildQuestionCandidates(current.candidates, current.session.targetType), current.session, current.candidates)
       : [];
     const offered = select(questionCandidates, ranked, current.session);
     const stop = deps.config.features.earlyStopping
@@ -267,6 +272,8 @@ function applyOutcome(
         ...state.session,
         currentQuestionId: question.questionId,
         askedQuestionIds: [...state.session.askedQuestionIds, question.questionId],
+        // S9.6: the semantic dimension is remembered across rounds, so a rewording cannot repeat it.
+        askedDimensions: [...(state.session.askedDimensions ?? []), questionDimension(question, state.candidates)],
         questionCount: state.session.questionCount + 1,
       },
     };
@@ -287,7 +294,7 @@ function applyOutcome(
 function noQuestionEvidence(state: SessionState): boolean {
   return (
     state.session.questionCount === 0 &&
-    availableQuestions(buildQuestionCandidates(state.candidates, state.session.targetType), state.session).length === 0
+    availableQuestions(buildQuestionCandidates(state.candidates, state.session.targetType), state.session, state.candidates).length === 0
   );
 }
 
@@ -299,9 +306,79 @@ function finishState(state: SessionState, reason: FinishReason): SessionState {
   };
 }
 
+/** S9.6: candidates the user explicitly rejected as recommendations (entity-level, never their tags). */
+const dismissedIds = (session: SessionState["session"]): Set<string> =>
+  new Set((session.recommendationFeedback ?? []).filter((f) => f.action === "reject" && f.entityId).map((f) => f.entityId!));
+
+/** Candidates still eligible to be shown: explicitly rejected recommendations are withdrawn. */
+const visibleCandidates = (state: SessionState) => {
+  const dismissed = dismissedIds(state.session);
+  return dismissed.size ? state.candidates.filter((c) => !dismissed.has(c.entityId)) : state.candidates;
+};
+
 /** Records the ranked order the user will see, so the next transition can report movement. */
 function withOrder(state: SessionState, previousOrder: string[] | null): SessionState {
-  return { ...state, order: orderOf(rankCandidates(state.candidates, state.session, previousOrder)) };
+  return { ...state, order: orderOf(rankCandidates(visibleCandidates(state), state.session, previousOrder)) };
+}
+
+/**
+ * Final recommendations for a presenting round. Round 1 (nothing presented yet)
+ * is the unchanged top N. Later rounds prefer verified candidates not presented
+ * before, then fill with earlier ones; the result keeps rank order and positions.
+ */
+function finalRecommendations(deps: DiscoveryDeps, session: SessionState["session"], ranked: RankedRecommendation[]): RankedRecommendation[] {
+  const n = deps.config.limits.finalRecommendationCount;
+  const presented = new Set(session.presentedEntityIds ?? []);
+  if (!presented.size) return ranked.slice(0, n);
+  const unseen = ranked.filter((r) => !presented.has(r.candidate.entityId));
+  const seen = ranked.filter((r) => presented.has(r.candidate.entityId));
+  return [...unseen, ...seen].slice(0, n).sort((a, b) => a.position - b.position);
+}
+
+const roundOf = (session: SessionState["session"]) => session.round ?? 1;
+
+/** Gemini requests one more decision may need (a call plus its bounded repair). */
+const GEMINI_RESERVE = MAX_REQUESTS_PER_DECISION;
+
+/** S9.6 exploration summary; every number derives from the stored state. */
+function explorationOf(deps: DiscoveryDeps, state: SessionState, finalIds: string[]): ExplorationState {
+  const { session } = state;
+  const dismissed = dismissedIds(session);
+  const presented = session.presentedEntityIds ?? [];
+  const shownNow = session.status === "active" ? [] : finalIds;
+  const eligible = state.candidates.filter((c) => !dismissed.has(c.entityId) && !session.rejectedEntityIds.includes(c.entityId));
+  const unseen = eligible.filter((c) => !presented.includes(c.entityId) && !shownNow.includes(c.entityId)).length;
+  // A new round is worthwhile only if it can surface an unseen pick or ask an unasked grounded question.
+  const questionsLeft =
+    eligible.length > 0 &&
+    availableQuestions(buildQuestionCandidates(state.candidates, session.targetType), session, state.candidates).length > 0;
+  const geminiUsed = session.geminiRequestCount ?? 0;
+  const geminiMax = deps.config.limits.maxGeminiRequestsPerExploration;
+  const budgetBlocked = Boolean(deps.boundedAgent) && geminiUsed + GEMINI_RESERVE > geminiMax;
+  const reason =
+    session.status === "active"
+      ? "round_in_progress"
+      : session.status === "accepted"
+        ? "accepted"
+        : eligible.length === 0 || (unseen === 0 && !questionsLeft)
+          ? "candidates_exhausted"
+          : budgetBlocked
+            ? "budget_exhausted"
+            : null;
+  return {
+    explorationId: session.sessionId,
+    round: roundOf(session),
+    status: session.status === "active" ? "asking" : session.status === "accepted" ? "accepted" : "presenting",
+    acceptedEntityId: session.acceptedEntityId ?? null,
+    rejectedRecommendationIds: [...dismissed],
+    totalQuestionsAsked: session.askedQuestionIds.length,
+    previouslyPresentedIds: [...presented],
+    unseenCandidateCount: unseen,
+    canContinue: reason === null,
+    continueBlockedReason: reason,
+    budget: { qlooUsed: session.qlooCallCount, qlooMax: deps.config.limits.maxQlooCallsPerSession, geminiUsed, geminiMax },
+    expiresAt: session.expiresAt,
+  };
 }
 
 type LiveExtras = {
@@ -333,9 +410,10 @@ function toView(
 ): DiscoveryView {
   assertGrounded(deps, state);
   const { session } = state;
-  const ranked = rankCandidates(state.candidates, session, previousOrder);
-  const finished = session.status === "finished";
-  const recommendations = finished ? ranked.slice(0, deps.config.limits.finalRecommendationCount) : ranked;
+  const ranked = rankCandidates(visibleCandidates(state), session, previousOrder);
+  // "finished" = presenting this round's results; "accepted" is the terminal choice (S9.6).
+  const finished = session.status !== "active";
+  const recommendations = finished ? finalRecommendations(deps, session, ranked) : ranked;
   const preferences = {
     positiveTagIds: session.positiveTagIds,
     rejectedTagIds: session.rejectedTagIds,
@@ -373,13 +451,24 @@ function toView(
     },
     ...(live ? { recommendationUpdate: live.update, degraded: live.degraded ? { reason: live.degraded } : null, trace: live.trace } : {}),
     // Pure presentation of the final list: no provider call, no ranking change, not stored in the session.
-    ...(finished ? { discoveryPath: buildDiscoveryPath({ recommendations, preferences, seed: state.seed, targetType: session.targetType }) } : {}),
+    ...(finished
+      ? {
+          discoveryPath: buildDiscoveryPath({
+            recommendations,
+            preferences,
+            seed: state.seed,
+            targetType: session.targetType,
+            previouslyPresentedIds: session.presentedEntityIds ?? [],
+          }),
+        }
+      : {}),
+    exploration: explorationOf(deps, state, finished ? recommendations.map((r) => r.candidate.entityId) : []),
   };
 }
 
 const TOP_K = 5;
 const topIds = (state: SessionState, previousOrder: string[] | null) =>
-  orderOf(rankCandidates(state.candidates, state.session, previousOrder)).slice(0, TOP_K);
+  orderOf(rankCandidates(visibleCandidates(state), state.session, previousOrder)).slice(0, TOP_K);
 
 function liveDepsOf(deps: DiscoveryDeps, ledger: LiveLedger): LiveDeps {
   return {
@@ -397,7 +486,7 @@ function liveDepsOf(deps: DiscoveryDeps, ledger: LiveLedger): LiveDeps {
  */
 function pairFields(deps: DiscoveryDeps, state: SessionState): Record<string, unknown> {
   const { session } = state;
-  const finished = session.status === "finished";
+  const finished = session.status !== "active";
   const finalCount = Math.min(state.candidates.length, deps.config.limits.finalRecommendationCount);
   return {
     sourceType: session.sourceType,
@@ -528,7 +617,8 @@ export async function answerDiscovery(deps: DiscoveryDeps, input: AnswerRequest)
   const { state } = loaded;
   const { session } = state;
 
-  if (session.status === "finished" || !session.currentQuestionId) {
+  // A presenting or accepted round is closed to answers (S4 rule, kept in S9.6; new rounds come only from `continue`).
+  if (session.status !== "active" || !session.currentQuestionId) {
     if (session.questionCount >= session.maxQuestions) {
       throw new AppError("QUESTION_BUDGET_EXHAUSTED", 409, `No more than ${session.maxQuestions} questions can be answered`);
     }
@@ -545,7 +635,9 @@ export async function answerDiscovery(deps: DiscoveryDeps, input: AnswerRequest)
   const question = allQuestions.find((q) => q.questionId === input.questionId);
   if (!question) throw new AppError("INVALID_QUESTION", 400, "Unknown question ID");
 
-  const answer = buildAnswer(question, input.response, nowOf(deps));
+  const built = buildAnswer(question, input.response, nowOf(deps));
+  // Round 1 answers keep the original shape; later rounds are tagged for the cumulative history.
+  const answer = roundOf(session) > 1 ? { ...built, round: roundOf(session) } : built;
 
   // Everything above is validation against authoritative state; no paid call has happened.
   const lease: Lease = await sessions.acquire(loaded);
@@ -637,7 +729,7 @@ export async function finishDiscovery(deps: DiscoveryDeps, sessionToken: string)
       state.finishReason === "question_budget_exhausted" ? "question_budget_exhausted" : "stable_recommendations",
     done: true,
   };
-  if (state.session.status === "finished") {
+  if (state.session.status !== "active") {
     // Idempotent for the current token only: no write, same final shortlist.
     return toView(deps, state, state.order, decision, sessions.tokenFor(loaded), loaded.revision);
   }
@@ -646,4 +738,196 @@ export async function finishDiscovery(deps: DiscoveryDeps, sessionToken: string)
   const token = await sessions.commit(loaded, finished);
   logEvent("info", "discovery.finish", { requestId: deps.requestId, revision: loaded.revision + 1, sessionStore: deps.store.kind, latencyMs: Math.round(performance.now() - startedAt), ...pairFields(deps, finished) });
   return toView(deps, finished, state.order, decision, token, loaded.revision + 1);
+}
+
+// ---------------------------------------------------------------- S9.6 multi-round exploration
+//
+// One exploration = one server-side session record, so every transition below is a
+// single CAS on the existing store: the signed {sid, rev, exp} token, revision checks,
+// leases, replay rejection and expiry apply unchanged. History is never taken from
+// the client; each request carries only the token and, at most, one entity ID that
+// must belong to the current round's verified final recommendations.
+
+const presentingDecision = (state: SessionState): AgentDecision => ({
+  action: "finish",
+  reasonCode: state.finishReason === "question_budget_exhausted" ? "question_budget_exhausted" : "stable_recommendations",
+  done: true,
+});
+
+/** Feedback and continuation are only valid while a round is presenting its results. */
+function assertPresenting(session: SessionState["session"]): void {
+  if (session.status === "accepted") {
+    throw new AppError("EXPLORATION_CLOSED", 409, "This exploration already ended with an accepted recommendation");
+  }
+  if (session.status === "active") {
+    throw new AppError("ROUND_IN_PROGRESS", 409, "Finish the current round before giving recommendation feedback");
+  }
+}
+
+/** The verified final recommendations the user is looking at right now (IDs the server issued). */
+function presentedNow(deps: DiscoveryDeps, state: SessionState): RankedRecommendation[] {
+  return finalRecommendations(deps, state.session, rankCandidates(visibleCandidates(state), state.session, state.order));
+}
+
+function assertShown(deps: DiscoveryDeps, state: SessionState, entityId: string): void {
+  if (!presentedNow(deps, state).some((r) => r.candidate.entityId === entityId)) {
+    throw new AppError("INVALID_RECOMMENDATION", 400, "Only a recommendation shown in the current results can be chosen");
+  }
+}
+
+const feedback = (state: SessionState, revision: number, at: number, entry: { action: "reject" | "accept" | "continue"; entityId?: string; correction?: "reversed_positive" }) => [
+  ...(state.session.recommendationFeedback ?? []),
+  { ...entry, round: roundOf(state.session), revision, at },
+];
+
+/**
+ * REJECT a shown recommendation. Records only that entity as unwanted (never its
+ * tags), withdraws it from future results, and reverses an earlier explicit
+ * positive answer about it (recorded as a correction). No provider call.
+ */
+export async function rejectRecommendation(deps: DiscoveryDeps, input: RecommendationFeedbackRequest): Promise<DiscoveryView> {
+  const sessions = sessionsOf(deps);
+  const loaded = await sessions.load(input.sessionToken);
+  const { state } = loaded;
+  assertPresenting(state.session);
+  assertShown(deps, state, input.entityId);
+  const wasPositive = state.session.positiveEntityIds.includes(input.entityId);
+  const next = withOrder(
+    {
+      ...state,
+      session: {
+        ...state.session,
+        rejectedEntityIds: [...new Set([...state.session.rejectedEntityIds, input.entityId])],
+        positiveEntityIds: state.session.positiveEntityIds.filter((id) => id !== input.entityId),
+        recommendationFeedback: feedback(state, loaded.revision, nowOf(deps), {
+          action: "reject",
+          entityId: input.entityId,
+          ...(wasPositive ? { correction: "reversed_positive" as const } : {}),
+        }),
+      },
+    },
+    state.order,
+  );
+  // Lock-free CAS (as finish): a concurrent or replayed transition gets 409.
+  const token = await sessions.commit(loaded, next);
+  logEvent("info", "discovery.reject", { requestId: deps.requestId, revision: loaded.revision + 1, round: roundOf(state.session), sessionStore: deps.store.kind, ...pairFields(deps, next) });
+  return toView(deps, next, state.order, presentingDecision(next), token, loaded.revision + 1);
+}
+
+/** ACCEPT a shown recommendation: records the intention to try it (not consumption). Terminal. */
+export async function acceptRecommendation(deps: DiscoveryDeps, input: RecommendationFeedbackRequest): Promise<DiscoveryView> {
+  const sessions = sessionsOf(deps);
+  const loaded = await sessions.load(input.sessionToken);
+  const { state } = loaded;
+  assertPresenting(state.session);
+  assertShown(deps, state, input.entityId);
+  const next: SessionState = {
+    ...state,
+    session: {
+      ...state.session,
+      status: "accepted",
+      acceptedEntityId: input.entityId,
+      recommendationFeedback: feedback(state, loaded.revision, nowOf(deps), { action: "accept", entityId: input.entityId }),
+    },
+  };
+  const token = await sessions.commit(loaded, next);
+  logEvent("info", "discovery.accept", { requestId: deps.requestId, revision: loaded.revision + 1, round: roundOf(state.session), sessionStore: deps.store.kind, ...pairFields(deps, next) });
+  return toView(deps, next, state.order, presentingDecision(next), token, loaded.revision + 1);
+}
+
+/**
+ * CONTINUE: open the next round from the stored context. All preferences,
+ * question history (IDs and semantic dimensions), rejections and usage carry
+ * over; only the per-round question counter restarts. The round's current
+ * results are remembered as presented so the next round leads with unseen ones.
+ * Refused (typed, context preserved, no provider call) when the verified pool is
+ * exhausted or the exploration's Gemini allowance cannot cover another decision.
+ */
+export async function continueExploration(deps: DiscoveryDeps, input: ContinueRequest): Promise<DiscoveryView> {
+  const sessions = sessionsOf(deps);
+  const loaded = await sessions.load(input.sessionToken);
+  const { state } = loaded;
+  const { session } = state;
+  assertPresenting(session);
+  const shown = presentedNow(deps, state).map((r) => r.candidate.entityId);
+  const blocked = explorationOf(deps, state, shown).continueBlockedReason;
+  if (blocked === "candidates_exhausted") {
+    throw new AppError(
+      "EXPLORATION_EXHAUSTED",
+      409,
+      `Every verified ${domainLabel(session.targetType)} found for this anchor has been shown or turned down, and no unasked question remains. Try a different anchor or destination.`,
+    );
+  }
+  if (blocked === "budget_exhausted") {
+    throw new AppError("EXPLORATION_BUDGET_EXHAUSTED", 429, "This exploration has used its question allowance. Your results are kept; start a new exploration to keep going.");
+  }
+  const round = roundOf(session) + 1;
+  const opened: SessionState = {
+    ...state,
+    finishReason: null,
+    session: {
+      ...session,
+      status: "active",
+      round,
+      questionCount: 0,
+      currentQuestionId: undefined,
+      presentedEntityIds: [...new Set([...(session.presentedEntityIds ?? []), ...shown])],
+      recommendationFeedback: feedback(state, loaded.revision, nowOf(deps), { action: "continue" }),
+    },
+  };
+  // A new round may call Gemini: take the lease first so a concurrent continue gets 409 before any paid work.
+  const lease = await sessions.acquire(loaded);
+  if (deps.boundedAgent) return continueLive(deps, sessions, lease, state, opened);
+  const ledger: UsageLedger = { qlooCalls: 0, toolCalls: 0 };
+  let next: SessionState;
+  let decision: AgentDecision;
+  try {
+    const out = await runAgent(deps, opened, ledger);
+    next = withOrder(applyOutcome(out.state, out.question, out.decision), state.order);
+    decision = out.decision;
+  } catch (error) {
+    await releaseQuietly(sessions, lease, withUsage(state, ledger));
+    throw error;
+  }
+  const token = await sessions.commit(lease, next);
+  logEvent("info", "discovery.continue", { requestId: deps.requestId, revision: lease.revision + 1, round, sessionStore: deps.store.kind, ...pairFields(deps, next) });
+  return toView(deps, next, state.order, decision, token, lease.revision + 1);
+}
+
+async function continueLive(
+  deps: DiscoveryDeps,
+  sessions: SessionService,
+  lease: Lease,
+  state: SessionState,
+  opened: SessionState,
+): Promise<DiscoveryView> {
+  const ledger = newLedger();
+  const live = liveDepsOf(deps, ledger);
+  let outcome: LiveOutcome;
+  let next: SessionState;
+  try {
+    // No new answer was given, so no new signal could justify a Qloo retrieval here.
+    outcome = await decideAndExecute(live, opened, ledger, { allowRetrieval: false });
+    next = applyLedger(withOrder(applyOutcome(outcome.state, outcome.question, outcome.decision), state.order), ledger);
+  } catch (error) {
+    await releaseQuietly(sessions, lease, applyLedger(state, ledger));
+    throw error;
+  }
+  const token = await sessions.commit(lease, next);
+  const update: RecommendationUpdate = {
+    mechanism: "UNCHANGED",
+    qlooRequested: false,
+    internalCorrelationIds: [],
+    previousTopIds: state.order.slice(0, TOP_K),
+    updatedTopIds: topIds(next, state.order),
+    preferenceIds: [],
+  };
+  logTurn(deps, "continue", ledger, {
+    revision: lease.revision + 1,
+    round: roundOf(next.session),
+    action: outcome.decision.action,
+    selectedQuestionId: outcome.decision.selectedQuestionId ?? null,
+    ...pairFields(deps, next),
+  });
+  return toView(deps, next, state.order, outcome.decision, token, lease.revision + 1, liveExtras(deps, ledger, outcome, update));
 }

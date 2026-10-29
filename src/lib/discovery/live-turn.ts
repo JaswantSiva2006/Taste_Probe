@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { AgentDecision, Question, TurnTrace } from "@/lib/contracts";
 import { deterministicDecision, type AgentMode, type AgentResult, type BoundedAgent } from "@/lib/agent/bounded";
+import { MAX_REQUESTS_PER_DECISION } from "@/lib/agent/gemini-agent";
 import { buildAgentContext, offeredQuestions, type AgentDecisionContext } from "@/lib/agent/context";
 import type { AppConfig } from "@/lib/config/env";
 import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
@@ -123,6 +124,10 @@ export type LiveDeps = {
 const qlooRemaining = (deps: LiveDeps, state: SessionState, ledger: LiveLedger) =>
   deps.config.limits.maxQlooCallsPerSession - state.session.qlooCallCount - ledger.qlooBudgetCalls;
 
+/** S9.6: Gemini requests left in this exploration (all rounds), including this request's usage so far. */
+const geminiRemaining = (deps: LiveDeps, state: SessionState, ledger: LiveLedger) =>
+  deps.config.limits.maxGeminiRequestsPerExploration - (state.session.geminiRequestCount ?? 0) - ledger.geminiRequests;
+
 /**
  * Executes one authorized Insights retrieval through the S3 provider. Budget is
  * checked before the call and charged conservatively if the call fails.
@@ -176,6 +181,12 @@ async function eligibleTraces(deps: LiveDeps, state: SessionState, ledger: LiveL
     ledger.questionPool = generated;
     ledger.questionGeneration = { generated: 0, accepted: 0, rejected: 0, fallbackReason: "generator_unavailable" };
   }
+  if (deps.config.features.questionGenerationMode === "llm_grounded" && deps.questionGenerator && generated === undefined && geminiRemaining(deps, state, ledger) < 1) {
+    // Exploration Gemini allowance spent: grounded deterministic questions, no proposer call.
+    generated = buildQuestionCandidates(state.candidates, state.session.targetType);
+    ledger.questionPool = generated;
+    ledger.questionGeneration = { generated: 0, accepted: 0, rejected: 0, fallbackReason: "exploration_gemini_budget_exhausted" };
+  }
   if (deps.config.features.questionGenerationMode === "llm_grounded" && deps.questionGenerator && generated === undefined) {
     const result = await deps.questionGenerator.generate({ seed: state.seed, session: state.session, ranked });
     ledger.geminiRequests += result.usage.requests;
@@ -195,7 +206,7 @@ async function eligibleTraces(deps: LiveDeps, state: SessionState, ledger: LiveL
     ledger.questionPool = generated;
   }
   const source = generated ?? buildQuestionCandidates(state.candidates, state.session.targetType);
-  const questions = availableQuestions(source, state.session);
+  const questions = availableQuestions(source, state.session, state.candidates);
   const eligible = optimizeQuestions(questions, ranked, {
     askedQuestionIds: state.session.askedQuestionIds,
     preferences: state.session,
@@ -282,6 +293,10 @@ export async function decideAndExecute(
   let current = state;
   let allowRetrieval = opts.allowRetrieval;
   for (let step = 0; step < MAX_DECISIONS_PER_TURN; step += 1) {
+    if (deps.boundedAgent.mode === "LIVE_GEMINI" && geminiRemaining(deps, current, ledger) < MAX_REQUESTS_PER_DECISION) {
+      // S9.6: never exceed the exploration's Gemini allowance; decide deterministically, labelled as such.
+      return fallback(await contextFor(deps, current, ledger, false), current, ledger, "exploration_gemini_budget_exhausted");
+    }
     const context = await contextFor(deps, current, ledger, allowRetrieval);
     const result = await deps.boundedAgent.decide(context);
     record(ledger, result);

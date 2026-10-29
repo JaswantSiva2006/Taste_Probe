@@ -17,7 +17,14 @@ import { isUsefulTag } from "./tag-quality";
  * provider, changes ranking, adds entities, or touches session state.
  */
 
-export type PathInput = Pick<DiscoveryView, "recommendations" | "preferences" | "seed" | "targetType">;
+export type PathInput = Pick<DiscoveryView, "recommendations" | "preferences" | "seed" | "targetType"> & {
+  /**
+   * S9.6: final recommendations already presented in earlier rounds. Featured
+   * slots prefer candidates not yet presented (in unchanged rank order), so a
+   * new round does not re-announce the same pick as a discovery.
+   */
+  previouslyPresentedIds?: string[];
+};
 
 const MAX_PREFERENCE_TAGS = 2;
 
@@ -35,6 +42,27 @@ const listOf = (names: string[]) =>
 
 /** An explicit entity rejection is the only ineligibility the ranking expresses. */
 const eligible = (r: RankedRecommendation, input: PathInput) => !input.preferences.rejectedEntityIds.includes(r.candidate.entityId);
+
+const presentedBefore = (r: RankedRecommendation, input: PathInput) => (input.previouslyPresentedIds ?? []).includes(r.candidate.entityId);
+
+/** Featured-slot order: eligible candidates not yet presented, then already-presented ones; rank order kept within each. */
+function featuredPool(input: PathInput): RankedRecommendation[] {
+  const pool = input.recommendations.filter((r) => eligible(r, input));
+  return [...pool.filter((r) => !presentedBefore(r, input)), ...pool.filter((r) => presentedBefore(r, input))];
+}
+
+/** Truthful tail for START HERE when higher-ranked results were skipped. */
+function startTail(r: RankedRecommendation, input: PathInput): string {
+  // Never present an earlier pick as new: say so when every unseen option is gone.
+  if (presentedBefore(r, input)) return ". You were shown it in an earlier round; it now ranks highest among the picks you haven't turned down.";
+  if (r.position === 1) return ", and it is the highest-ranked result.";
+  const above = input.recommendations.filter((x) => x.position < r.position);
+  const rejected = above.some((x) => !eligible(x, input));
+  const seen = above.some((x) => eligible(x, input) && presentedBefore(x, input));
+  if (rejected && seen) return ", and it is the highest-ranked result you haven't seen or turned down.";
+  if (seen) return ", and it is the highest-ranked result you haven't been shown yet.";
+  return ", and it is the highest-ranked result you didn't turn down.";
+}
 
 const usefulTags = (r: RankedRecommendation): Tag[] => r.candidate.tags.filter(isUsefulTag);
 
@@ -93,13 +121,16 @@ function evidenceOf(r: RankedRecommendation, input: PathInput, preferenceIds: st
 
 /** The always-true fallback: provenance only. */
 function neutralExplanation(r: RankedRecommendation, input: PathInput, role: DiscoveryPathRole): DiscoveryPathItem["explanation"] {
+  const laterRound = (input.previouslyPresentedIds ?? []).length > 0;
   const tail =
     role === "START_HERE"
-      ? r.position === 1
-        ? ", and it is the highest-ranked result."
-        : ", and it is the highest-ranked result you didn't turn down."
+      ? startTail(r, input)
       : role === "EXPLORE_NEXT"
-        ? "; it ranks next."
+        ? !laterRound
+          ? "; it ranks next."
+          : presentedBefore(r, input)
+            ? "; you were shown it in an earlier round."
+            : "; it is the next pick you haven't been shown yet."
         : ".";
   return {
     kind: "source_grounded",
@@ -146,10 +177,10 @@ function item(r: RankedRecommendation, input: PathInput, role: DiscoveryPathRole
 
 export function buildDiscoveryPath(input: PathInput): DiscoveryPath {
   const recs = input.recommendations;
-  const pool = recs.filter((r) => eligible(r, input));
+  const pool = featuredPool(input);
   const featured: DiscoveryPathItem[] = [];
 
-  // START HERE: the highest-ranked eligible recommendation, exactly as ranked.
+  // START HERE: the highest-ranked eligible recommendation not yet presented (round 1: exactly as ranked).
   const start = pool[0];
   if (start) featured.push(item(start, input, "START_HERE", null));
 
@@ -232,7 +263,7 @@ export function discoveryPathProblems(path: DiscoveryPath, input: PathInput): st
   if (path.remainingEntityIds.join("|") !== ids.filter((id) => !featuredIds.includes(id)).join("|")) {
     problems.push("remaining recommendations are not in ranked order");
   }
-  const firstEligible = input.recommendations.find((r) => eligible(r, input));
+  const firstEligible = featuredPool(input)[0];
   const start = path.featured.find((f) => f.role === "START_HERE");
   if (firstEligible && start?.recommendationEntityId !== firstEligible.candidate.entityId) problems.push("START_HERE is not the top eligible pick");
   if (path.featured[0] && path.featured[0].role !== "START_HERE") problems.push("first featured item is not START_HERE");

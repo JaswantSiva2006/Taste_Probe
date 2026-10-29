@@ -60,4 +60,11 @@ export const api = {
     call("/api/discovery/answer", DiscoveryViewSchema, post({ sessionToken, questionId, response })),
   finish: (sessionToken: string): Promise<WithMode<DiscoveryView>> =>
     call("/api/discovery/finish", DiscoveryViewSchema, post({ sessionToken })),
+  // S9.6 multi-round exploration (consumed by the S9.7 UI)
+  reject: (sessionToken: string, entityId: string): Promise<WithMode<DiscoveryView>> =>
+    call("/api/discovery/reject", DiscoveryViewSchema, post({ sessionToken, entityId })),
+  accept: (sessionToken: string, entityId: string): Promise<WithMode<DiscoveryView>> =>
+    call("/api/discovery/accept", DiscoveryViewSchema, post({ sessionToken, entityId })),
+  continue: (sessionToken: string): Promise<WithMode<DiscoveryView>> =>
+    call("/api/discovery/continue", DiscoveryViewSchema, post({ sessionToken })),
 };

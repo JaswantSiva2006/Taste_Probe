@@ -109,6 +109,8 @@ export const PreferenceAnswerSchema = z.object({
   targetIds: z.array(z.string().min(1)).min(1),
   response: PreferenceResponseSchema,
   timestamp: z.number().int().nonnegative(),
+  /** S9.6: exploration round the answer belongs to (absent = round 1). */
+  round: z.number().int().positive().optional(),
 });
 export type PreferenceAnswer = z.infer<typeof PreferenceAnswerSchema>;
 
@@ -121,6 +123,21 @@ export const QuestionSchema = z.object({
   allowedResponses: z.array(PreferenceResponseSchema).min(1),
 });
 export type Question = z.infer<typeof QuestionSchema>;
+
+/**
+ * S9.6 item-level feedback. A rejection concerns that one verified candidate,
+ * never its tags. `correction` records an explicit reversal of an earlier
+ * positive entity preference.
+ */
+export const RecommendationFeedbackSchema = z.object({
+  action: z.enum(["reject", "accept", "continue"]),
+  entityId: z.string().min(1).optional(),
+  round: z.number().int().positive(),
+  revision: z.number().int().nonnegative(),
+  at: z.number().int().nonnegative(),
+  correction: z.literal("reversed_positive").optional(),
+});
+export type RecommendationFeedback = z.infer<typeof RecommendationFeedbackSchema>;
 
 export const TasteSessionSchema = z.object({
   version: z.literal(1),
@@ -142,12 +159,23 @@ export const TasteSessionSchema = z.object({
   createdAt: z.number().int(),
   expiresAt: z.number().int(),
   // Internal additions (allowed by the skill): lifecycle, provider mode and agent usage.
-  status: z.enum(["active", "finished"]),
+  // S9.6: "finished" = the current round is presenting results (continuable);
+  // "accepted" = the user chose a recommendation (terminal).
+  status: z.enum(["active", "finished", "accepted"]),
   mode: ProviderModeSchema,
   agentToolCallCount: z.number().int().nonnegative(),
   // S7 live accounting (absent for mock sessions and sessions created before S7).
   geminiRequestCount: z.number().int().nonnegative().optional(),
   geminiCostUsd: z.number().nonnegative().optional(),
+  // S9.6 multi-round exploration (all optional: sessions stored before S9.6 are round 1).
+  /** Current round; `questionCount`/`maxQuestions` are per round, history is cumulative. */
+  round: z.number().int().positive().optional(),
+  /** Semantic dimensions already asked (tag label or unordered entity pair), across rounds. */
+  askedDimensions: z.array(z.string()).optional(),
+  /** Final recommendations already presented in earlier rounds (not the current one). */
+  presentedEntityIds: z.array(z.string()).optional(),
+  recommendationFeedback: z.array(RecommendationFeedbackSchema).optional(),
+  acceptedEntityId: z.string().optional(),
 });
 export type TasteSession = z.infer<typeof TasteSessionSchema>;
 

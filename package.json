@@ -18,6 +18,7 @@
     "test:redis": "cross-env RUN_REDIS_LIVE_TEST=1 vitest run tests/live/redis-store.live.test.ts",
     "smoke": "node scripts/smoke-mock.mjs",
     "smoke:mock": "node scripts/smoke-mock.mjs",
+    "smoke:multi-round": "node scripts/smoke-multi-round.mjs",
     "qa:ui": "node scripts/ui-qa.mjs",
     "qa": "node scripts/qa.mjs",
     "qa:live": "node scripts/qa-live.mjs",

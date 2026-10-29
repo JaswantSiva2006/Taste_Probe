@@ -45,6 +45,12 @@ export const ApiErrorCodeSchema = z.enum([
   "INVALID_QUESTION",
   "INVALID_ANSWER",
   "QUESTION_BUDGET_EXHAUSTED",
+  // S9.6 multi-round exploration
+  "ROUND_IN_PROGRESS",
+  "EXPLORATION_CLOSED",
+  "EXPLORATION_EXHAUSTED",
+  "EXPLORATION_BUDGET_EXHAUSTED",
+  "INVALID_RECOMMENDATION",
   "QLOO_BUDGET_EXHAUSTED",
   "QLOO_AUTH_ERROR",
   "QLOO_PERMISSION_ERROR",
@@ -129,6 +135,23 @@ export const FinishRequestSchema = z
   .object({ sessionToken: z.string().min(1).max(32_000) })
   .strict();
 export type FinishRequest = z.infer<typeof FinishRequestSchema>;
+
+// ---- S9.6: POST /api/discovery/{reject,accept,continue} --------------------
+// Each carries only the signed token and, where needed, ONE entity ID that the
+// server checks against the current round's verified final recommendations.
+// History is never accepted from the client.
+
+const EntityRef = z.string().trim().min(1).max(200);
+
+export const RecommendationFeedbackRequestSchema = z
+  .object({ sessionToken: z.string().min(1).max(32_000), entityId: EntityRef })
+  .strict();
+export type RecommendationFeedbackRequest = z.infer<typeof RecommendationFeedbackRequestSchema>;
+
+export const ContinueRequestSchema = z
+  .object({ sessionToken: z.string().min(1).max(32_000) })
+  .strict();
+export type ContinueRequest = z.infer<typeof ContinueRequestSchema>;
 
 // ---- Shared discovery state view (start/answer/finish responses) ----------
 
@@ -238,6 +261,38 @@ export const DiscoveryPathSchema = z.object({
 });
 export type DiscoveryPath = z.infer<typeof DiscoveryPathSchema>;
 
+// ---- S9.6 exploration state -----------------------------------------------
+
+export const ExplorationStatusSchema = z.enum(["asking", "presenting", "accepted"]);
+
+/** Why a "continue" is not currently possible (null when it is). */
+export const ContinueBlockedReasonSchema = z.enum(["round_in_progress", "accepted", "candidates_exhausted", "budget_exhausted"]);
+
+export const ExplorationStateSchema = z.object({
+  /** Same as sessionId: one exploration = one server-side session record. */
+  explorationId: z.string().min(1),
+  round: z.number().int().positive(),
+  status: ExplorationStatusSchema,
+  acceptedEntityId: z.string().nullable(),
+  rejectedRecommendationIds: z.array(z.string()),
+  /** Questions asked across all rounds (cumulative). */
+  totalQuestionsAsked: z.number().int().nonnegative(),
+  /** Final recommendations presented in earlier rounds. */
+  previouslyPresentedIds: z.array(z.string()),
+  /** Eligible verified candidates not yet presented (what a new round can surface). */
+  unseenCandidateCount: z.number().int().nonnegative(),
+  canContinue: z.boolean(),
+  continueBlockedReason: ContinueBlockedReasonSchema.nullable(),
+  budget: z.object({
+    qlooUsed: z.number().int().nonnegative(),
+    qlooMax: z.number().int().positive(),
+    geminiUsed: z.number().int().nonnegative(),
+    geminiMax: z.number().int().positive(),
+  }),
+  expiresAt: z.number().int(),
+});
+export type ExplorationState = z.infer<typeof ExplorationStateSchema>;
+
 export const DiscoveryViewSchema = z.object({
   sessionToken: z.string().min(1),
   sessionId: z.string().min(1),
@@ -280,5 +335,7 @@ export const DiscoveryViewSchema = z.object({
   trace: TurnTraceSchema.optional(),
   /** S9.2: present only on finished views; derived from `recommendations`, never stored. */
   discoveryPath: DiscoveryPathSchema.optional(),
+  /** S9.6: multi-round exploration state (additive; old clients may ignore it). */
+  exploration: ExplorationStateSchema.optional(),
 });
 export type DiscoveryView = z.infer<typeof DiscoveryViewSchema>;

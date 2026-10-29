@@ -57,6 +57,9 @@ const EnvSchema = z.object({
   MAX_QUESTIONS: int(MAX_QUESTIONS_LIMIT, 1, MAX_QUESTIONS_LIMIT),
   MAX_QLOO_CALLS_PER_SESSION: int(6, 1, 50),
   MAX_AGENT_TOOL_CALLS_PER_TURN: int(3, 1, 10),
+  // S9.6: cumulative Gemini requests per exploration (all rounds). MAX_QLOO_CALLS_PER_SESSION is
+  // already cumulative per exploration because rounds share one session record.
+  MAX_GEMINI_REQUESTS_PER_EXPLORATION: int(20, 2, 200),
   MAX_RECOMMENDATION_CANDIDATES: int(30, 2, 50),
   FINAL_RECOMMENDATION_COUNT: int(5, 1, 5),
 
@@ -91,6 +94,7 @@ export type AppConfig = {
     maxQuestions: number;
     maxQlooCallsPerSession: number;
     maxAgentToolCallsPerTurn: number;
+    maxGeminiRequestsPerExploration: number;
     maxRecommendationCandidates: number;
     finalRecommendationCount: number;
   };
@@ -241,6 +245,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       maxQuestions: e.MAX_QUESTIONS,
       maxQlooCallsPerSession: e.MAX_QLOO_CALLS_PER_SESSION,
       maxAgentToolCallsPerTurn: e.MAX_AGENT_TOOL_CALLS_PER_TURN,
+      maxGeminiRequestsPerExploration: e.MAX_GEMINI_REQUESTS_PER_EXPLORATION,
       maxRecommendationCandidates: e.MAX_RECOMMENDATION_CANDIDATES,
       finalRecommendationCount: e.FINAL_RECOMMENDATION_COUNT,
     },
