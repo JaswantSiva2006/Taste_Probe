@@ -81,7 +81,8 @@ are git-ignored; never commit credentials.
 | `SESSION_STORE` | Optional `memory` or `redis`. Defaults to `memory` outside production. Production always uses `redis`, and `memory` is rejected there. |
 | `MAX_QUESTIONS` (≤ 3), `MAX_QLOO_CALLS_PER_SESSION`, `MAX_AGENT_TOOL_CALLS_PER_TURN`, `MAX_RECOMMENDATION_CANDIDATES`, `FINAL_RECOMMENDATION_COUNT` (≤ 5) | Budgets. |
 | `QLOO_API_KEY`, `QLOO_BASE_URL`, `QLOO_TIMEOUT_MS` | Live Qloo credentials, validated HTTPS endpoint, and timeout. Never required in mock mode. |
-| `LLM_*`, `GOOGLE_API_KEY` | Reserved for the later Gemini agent and unused by S3. |
+| `LLM_PROVIDER` (`google` or `gemini`), `LLM_MODEL`, `GOOGLE_API_KEY`, `LLM_TEMPERATURE`, `LLM_TIMEOUT_MS` | Gemini agent (S6). Used only in live mode and by `smoke:gemini`. The key stays server-side. |
+| `MAX_AGENT_TOOL_CALLS_PER_TURN`, `ENABLE_AGENT_TRACING` | Per-turn cap on model function calls (enforced in code), and structured `agent.decision` traces. |
 | `ENABLE_*`, `CACHE_TTL_SECONDS`, `SENTRY_DSN` | Parsed for later segments; not yet wired. |
 
 Generate a secret with:
@@ -104,6 +105,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `npm run build` | Production build. |
 | `npm run smoke:mock` | HTTP end-to-end smoke test (below). |
 | `npm run smoke:qloo` | Real Qloo-only HTTP smoke: Search, selection validation, Insights, and provenance (3 requests, 0 Gemini calls). |
+| `npm run smoke:gemini` | Live Gemini agent smoke: one real function-calling decision (≤ 2 requests, < $0.01, 0 Qloo/Redis calls). |
 | `npm run evaluate:questions` | Offline fixture-backed S5 evaluation with eligible/rejected counts, H/D/I/R/U scores, counterfactual top-five rankings, and runtime. |
 
 Open http://localhost:3000, search **Interstellar**, select it, start discovery, answer a question and
@@ -156,6 +158,36 @@ If your env file keeps `QLOO_MODE=mock`, override it for a single run (PowerShel
 ```powershell
 $env:QLOO_MODE='live'; npm run probe:live; Remove-Item Env:QLOO_MODE
 ```
+
+## Gemini discovery agent (S6)
+
+`src/lib/agent/` provides a bounded agent: `decide(AgentDecisionContext) → AgentResult`.
+`createBoundedAgent(config)` selects the deterministic mock agent in mock mode and Gemini in live mode.
+It is **not yet wired into the discovery routes** (S7 owns that), so the mock pipeline is unchanged.
+
+- **Context** (`context.ts`) is built only from verified data: the top 3 S5-eligible questions (IDs, approved
+  wording, H/D/I/R/U scores), up to 8 sanitized and truncated candidate summaries, explicit preferences, and
+  budgets. It never includes tokens, secrets or raw provider payloads. The session is referenced by a hash.
+- **Real function calling** over the S2-verified REST API (`generateContent`, `x-goog-api-key`,
+  `toolConfig.mode = ANY`). The four tools `ask_question`, `request_retrieval`, `request_enrichment` and
+  `finish_discovery` are declared per turn only when permitted, with `enum`s of server-approved IDs.
+- **Authorization** (`tools.ts`): every returned call is re-validated with strict Zod schemas. Question IDs
+  must be in the S5 shortlist, entity IDs must be in the context, and retrieval signals must be confirmed
+  preferences. Unknown tools or fields are rejected. Calls become a canonical `AgentDecision` plus an optional
+  retrieval or enrichment *intent*. Nothing is executed: S7 runs intents through the Qloo provider and the S4 budgets.
+- **Grounded wording:** the displayed question text always comes from the approved S5 candidate. The model
+  cannot supply text.
+- **Hard stops in code** (finished or expired session, 3 questions asked, no permitted action, tool budget
+  used up) never call Gemini.
+- **Bounded failure handling:** at most 2 inference requests per decision, shared by one retry for
+  5xx/timeout/network errors and one schema repair. 400/401/403/429 are never retried. Every failure ends in an
+  explicitly labelled `DETERMINISTIC_FALLBACK` (the top S5 question, or finish). Modes are `LIVE_GEMINI`,
+  `MOCK_AGENT` and `DETERMINISTIC_FALLBACK`.
+- **Prompt-injection resistance:** trusted rules sit in the system instruction. Qloo text sits in a labelled,
+  untrusted `CATALOG_DATA` block. Outputs are validated independently of the prompt.
+- **Tracing and cost:** each decision logs request ID, model, mode, action, question ID, candidate count,
+  allowed and attempted tools, validation, fallback reason, latency, tokens (in/out/thinking) and estimated cost
+  (`$0.30` / `$2.50` per 1M tokens for `gemini-3.5-flash-lite`). Prompts and secrets are never logged.
 
 ## HTTP API
 
@@ -238,7 +270,7 @@ request), `SESSION_STORE_UNAVAILABLE` (503), and sanitized `QLOO_*` upstream err
 | Replace | Where | Contract to keep |
 | --- | --- | --- |
 | Live Qloo | Implemented in `src/lib/qloo/live-provider.ts` | `QlooProvider` + raw types → `normalize.ts` yields `QlooRecommendationCandidate` (`evidence.source = "qloo"`) |
-| Gemini agent | `createDiscoveryDeps` in `src/lib/discovery/deps.ts` | `DiscoveryAgent.decide` → `AgentDecision`, still passed through `validateAgentDecision` |
+| Gemini agent → orchestrator (S7) | `createBoundedAgent` in `src/lib/agent/factory.ts`, wired into `src/lib/discovery/service.ts` | `BoundedAgent.decide(AgentDecisionContext)` → `AgentResult` (decision + intent + mode + usage) |
 | Question optimizer (S5) | Implemented in `src/lib/discovery/question-optimizer.ts` | ordered grounded `Question[]` plus structured H/D/I/R/U traces |
 | Scoring | `rankCandidates` in `src/lib/discovery/ranking.ts` | `RankedRecommendation[]` |
 | Session store | `getSessionStore` in `src/lib/session/index.ts` | `SessionStore` (create / read / compareAndSwap / expire), canonical `TasteSession` fields |

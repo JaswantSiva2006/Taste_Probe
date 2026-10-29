@@ -18,6 +18,7 @@
     "test:redis": "cross-env RUN_REDIS_LIVE_TEST=1 vitest run tests/live/redis-store.live.test.ts",
     "smoke:mock": "node scripts/smoke-mock.mjs",
     "smoke:qloo": "node scripts/smoke-qloo.mjs",
+    "smoke:gemini": "node scripts/smoke-gemini.mjs",
     "evaluate:questions": "vitest run tests/evaluation/question-evaluation.test.ts --reporter=verbose",
     "probe:live": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/probe-live.mjs"
   },
