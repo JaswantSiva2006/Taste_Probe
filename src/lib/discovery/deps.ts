@@ -15,7 +15,7 @@ import type { DiscoveryDeps } from "./service";
  *   Gemini is misconfigured, never silently mock), driving the S7 live loop.
  * The session store is memory outside production and Redis in production.
  */
-export function createDiscoveryDeps(config: AppConfig): DiscoveryDeps {
+export function createDiscoveryDeps(config: AppConfig, requestId?: string): DiscoveryDeps {
   const questionGenerator =
     config.mode === "live" &&
     config.features.questionGenerationMode === "llm_grounded" &&
@@ -34,6 +34,7 @@ export function createDiscoveryDeps(config: AppConfig): DiscoveryDeps {
     provider: getQlooProvider(config),
     agent: createDeterministicMockAgent(),
     store: getSessionStore(config),
+    requestId,
     ...(config.mode === "live" ? { boundedAgent: createBoundedAgent(config) } : {}),
     ...(questionGenerator ? { questionGenerator } : {}),
   };

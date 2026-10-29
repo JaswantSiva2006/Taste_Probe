@@ -12,5 +12,6 @@ export async function GET(): Promise<Response> {
     mode: config.mode,
     qloo: { mode: config.mode, implemented: config.mode === "mock" || LIVE_QLOO_IMPLEMENTED },
     agent: agentLabel(config),
+    readiness: { configuration: "ready", sessionStore: config.sessionStore.kind, dependencies: "configured" },
   }));
 }

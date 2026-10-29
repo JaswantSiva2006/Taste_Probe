@@ -134,6 +134,25 @@ describe("configuration", () => {
     expect(loadConfig({ NODE_ENV: "test", SESSION_SIGNING_SECRET: newTestSecret() }).mode).toBe("mock");
   });
 
+  it("enables distributed rate limiting by default only in production", () => {
+    const secret = newTestSecret();
+    expect(loadConfig({ NODE_ENV: "test", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: secret }).rateLimit.enabled).toBe(false);
+    const prod = loadConfig({
+      NODE_ENV: "production", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: secret,
+      UPSTASH_REDIS_REST_URL: "https://example-redis.upstash.io", UPSTASH_REDIS_REST_TOKEN: "token",
+    });
+    expect(prod.rateLimit).toMatchObject({ enabled: true, searchMax: 30, startMax: 10, answerMax: 30, windowSeconds: 600 });
+  });
+
+  it("fails production-live readiness when paid-provider configuration is incomplete", () => {
+    const base = {
+      NODE_ENV: "production", QLOO_MODE: "live", SESSION_SIGNING_SECRET: newTestSecret(),
+      UPSTASH_REDIS_REST_URL: "https://example-redis.upstash.io", UPSTASH_REDIS_REST_TOKEN: "token",
+    };
+    expect(() => loadConfig(base)).toThrowError(/QLOO_API_KEY.*LLM_MODEL.*GOOGLE_API_KEY/);
+    expect(loadConfig({ ...base, QLOO_API_KEY: "qloo", LLM_MODEL: "gemini-3.5-flash-lite", GOOGLE_API_KEY: "google" }).sessionStore.kind).toBe("redis");
+  });
+
   it("requires a signing secret in live mode and in production", () => {
     expect(() => loadConfig({ NODE_ENV: "development", QLOO_MODE: "live" })).toThrowError(
       expect.objectContaining({ code: "CONFIG_ERROR" }),

@@ -6,6 +6,7 @@ export class AppError extends Error {
     public readonly code: ApiErrorCode,
     public readonly status: number,
     message: string,
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "AppError";

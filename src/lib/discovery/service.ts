@@ -60,6 +60,7 @@ export type DiscoveryDeps = {
   questionGenerator?: QuestionGenerator;
   selectQuestions?: QuestionSelector;
   now?: () => number;
+  requestId?: string;
 };
 
 const MIN_CANDIDATES = 2;
@@ -338,6 +339,7 @@ function liveDepsOf(deps: DiscoveryDeps, ledger: LiveLedger): LiveDeps {
 function logTurn(deps: DiscoveryDeps, kind: string, ledger: LiveLedger, fields: Record<string, unknown>): void {
   const t = traceOf(ledger, deps.store.kind);
   logEvent("info", "discovery.turn", {
+    requestId: deps.requestId,
     kind,
     sessionStore: t.sessionStore,
     turnId: t.turnId,
@@ -538,6 +540,7 @@ async function releaseQuietly(sessions: SessionService, lease: Lease, state: Ses
 }
 
 export async function finishDiscovery(deps: DiscoveryDeps, sessionToken: string): Promise<DiscoveryView> {
+  const startedAt = performance.now();
   const sessions = sessionsOf(deps);
   const loaded = await sessions.load(sessionToken);
   const { state } = loaded;
@@ -554,5 +557,6 @@ export async function finishDiscovery(deps: DiscoveryDeps, sessionToken: string)
   // Lock-free CAS: fails with 409 if an answer holds the lease or already advanced the revision.
   const finished = withOrder(finishState(state, "user_finished"), state.order);
   const token = await sessions.commit(loaded, finished);
+  logEvent("info", "discovery.finish", { requestId: deps.requestId, revision: loaded.revision + 1, sessionStore: deps.store.kind, latencyMs: Math.round(performance.now() - startedAt) });
   return toView(deps, finished, state.order, decision, token, loaded.revision + 1);
 }

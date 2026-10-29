@@ -76,6 +76,17 @@ describe("GET /api/health and /api/entities/search", () => {
     await fail(await searchRoute(new Request(`${BASE}/entities/search`)), 400, "VALIDATION_ERROR");
     await fail(await searchRoute(new Request(`${BASE}/entities/search?q=x&type=podcast`)), 400, "VALIDATION_ERROR");
   });
+
+  it("returns 429 with Retry-After before a second protected search", async () => {
+    vi.stubEnv("RATE_LIMIT_ENABLED", "true");
+    vi.stubEnv("RATE_LIMIT_SEARCH_MAX", "1");
+    vi.stubEnv("RATE_LIMIT_WINDOW_SECONDS", "60");
+    const first = await searchRoute(new Request(`${BASE}/entities/search?q=interstellar&type=movie`));
+    expect(first.status).toBe(200);
+    const second = await searchRoute(new Request(`${BASE}/entities/search?q=interstellar&type=movie`));
+    await fail(second, 429, "RATE_LIMITED");
+    expect(second.headers.get("retry-after")).toBe("60");
+  });
 });
 
 describe("POST /api/discovery/start", () => {

@@ -10,10 +10,14 @@ import { AppError } from "./errors";
 
 export type RouteContext = { requestId: string; config: AppConfig };
 
-function json(body: ApiSuccess<unknown> | ApiFailure, status: number, requestId: string): Response {
+function json(body: ApiSuccess<unknown> | ApiFailure, status: number, requestId: string, retryAfterSeconds?: number): Response {
   return Response.json(body, {
     status,
-    headers: { "x-request-id": requestId, "cache-control": "no-store" },
+    headers: {
+      "x-request-id": requestId,
+      "cache-control": "no-store",
+      ...(retryAfterSeconds === undefined ? {} : { "retry-after": String(retryAfterSeconds) }),
+    },
   });
 }
 
@@ -29,11 +33,13 @@ export async function handleApi<T>(
   handler: (ctx: RouteContext) => Promise<T>,
 ): Promise<Response> {
   const requestId = randomUUID();
+  const startedAt = performance.now();
   let mode: ProviderMode = readProviderMode();
   try {
     const config = loadConfig();
     mode = config.mode;
     const data = await handler({ requestId, config });
+    logEvent("info", "api.request", { route, requestId, outcome: "success", latencyMs: Math.round(performance.now() - startedAt) });
     return json({ ok: true, data, meta: { requestId, mode } }, 200, requestId);
   } catch (error) {
     const fail = (code: ApiFailure["error"]["code"], message: string, status: number) =>
@@ -43,8 +49,8 @@ export async function handleApi<T>(
       return fail("VALIDATION_ERROR", describeZodError(error), 400);
     }
     if (error instanceof AppError) {
-      logEvent(error.status >= 500 ? "error" : "warn", "api.error", { route, requestId, code: error.code });
-      return fail(error.code, error.message, error.status);
+      logEvent(error.status >= 500 ? "error" : "warn", "api.error", { route, requestId, code: error.code, status: error.status, latencyMs: Math.round(performance.now() - startedAt) });
+      return json({ ok: false, error: { code: error.code, message: error.message }, meta: { requestId, mode } }, error.status, requestId, error.retryAfterSeconds);
     }
     logEvent("error", "api.unhandled", {
       route,

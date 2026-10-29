@@ -50,6 +50,8 @@ export const ApiErrorCodeSchema = z.enum([
   "QLOO_TIMEOUT",
   "QLOO_UPSTREAM_ERROR",
   "QLOO_INVALID_RESPONSE",
+  "RATE_LIMITED",
+  "SERVICE_DISABLED",
   "AGENT_DECISION_INVALID",
   "LIVE_PROVIDER_NOT_IMPLEMENTED",
   "CONFIG_ERROR",
@@ -82,6 +84,7 @@ export const HealthDataSchema = z.object({
   mode: ProviderModeSchema,
   qloo: z.object({ mode: ProviderModeSchema, implemented: z.boolean() }),
   agent: z.string(),
+  readiness: z.object({ configuration: z.literal("ready"), sessionStore: z.enum(["memory", "redis"]), dependencies: z.literal("configured") }).optional(),
 });
 export type HealthData = z.infer<typeof HealthDataSchema>;
 
@@ -151,6 +154,7 @@ export const TurnTraceSchema = z.object({
   turnId: z.string(),
   qlooRequests: z.number().int().nonnegative(),
   geminiRequests: z.number().int().nonnegative(),
+  geminiRequestBreakdown: z.object({ proposer: z.number().int().nonnegative(), decisionAgent: z.number().int().nonnegative() }).optional(),
   geminiTokens: z.object({ input: z.number(), output: z.number(), thinking: z.number() }),
   estimatedGeminiCostUsd: z.number().nullable(),
   latencyMs: z.number(),

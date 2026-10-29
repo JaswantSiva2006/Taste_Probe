@@ -259,6 +259,10 @@ export function friendlyError(code: string): FriendlyError {
       return { title: "Qloo didn't answer", body: "The recommendation service had a problem. Try again in a moment.", recovery: "retry" };
     case "SESSION_STORE_UNAVAILABLE":
       return { title: "Session storage is unavailable", body: "We couldn't safely save your progress. Try again shortly.", recovery: "retry" };
+    case "RATE_LIMITED":
+      return { title: "Too many requests", body: "TasteProbe is protecting the public demo. Wait a moment, then try again.", recovery: "retry" };
+    case "SERVICE_DISABLED":
+      return { title: "New screenings are paused", body: "TasteProbe is temporarily pausing new sessions. Please try again shortly.", recovery: "retry" };
     case "VALIDATION_ERROR":
       return { title: "That didn't look right", body: "Check what you typed and try again.", recovery: "edit" };
     default:

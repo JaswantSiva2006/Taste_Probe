@@ -37,6 +37,8 @@ export type LiveLedger = {
   /** Executed agent tools (retrieval/enrichment) this turn. */
   toolCalls: number;
   geminiRequests: number;
+  geminiProposerRequests: number;
+  geminiDecisionRequests: number;
   geminiCostUsd: number;
   geminiCostKnown: boolean;
   tokens: { input: number; output: number; thinking: number };
@@ -62,6 +64,8 @@ export function newLedger(): LiveLedger {
     qlooBudgetCalls: 0,
     toolCalls: 0,
     geminiRequests: 0,
+    geminiProposerRequests: 0,
+    geminiDecisionRequests: 0,
     geminiCostUsd: 0,
     geminiCostKnown: true,
     tokens: { input: 0, output: 0, thinking: 0 },
@@ -171,6 +175,7 @@ async function eligibleTraces(deps: LiveDeps, state: SessionState, ledger: LiveL
   if (deps.config.features.questionGenerationMode === "llm_grounded" && deps.questionGenerator && generated === undefined) {
     const result = await deps.questionGenerator.generate({ seed: state.seed, session: state.session, ranked });
     ledger.geminiRequests += result.usage.requests;
+    ledger.geminiProposerRequests += result.usage.requests;
     ledger.tokens.input += result.usage.promptTokens;
     ledger.tokens.output += result.usage.outputTokens;
     ledger.tokens.thinking += result.usage.thoughtTokens;
@@ -222,6 +227,7 @@ async function contextFor(deps: LiveDeps, state: SessionState, ledger: LiveLedge
 
 function record(ledger: LiveLedger, result: AgentResult): void {
   ledger.geminiRequests += result.usage.requests;
+  ledger.geminiDecisionRequests += result.usage.requests;
   ledger.tokens.input += result.usage.promptTokens;
   ledger.tokens.output += result.usage.outputTokens;
   ledger.tokens.thinking += result.usage.thoughtTokens;
@@ -315,6 +321,7 @@ export function traceOf(ledger: LiveLedger, sessionStore: "memory" | "redis"): T
     turnId: ledger.turnId,
     qlooRequests: ledger.qlooNetwork,
     geminiRequests: ledger.geminiRequests,
+    geminiRequestBreakdown: { proposer: ledger.geminiProposerRequests, decisionAgent: ledger.geminiDecisionRequests },
     geminiTokens: { ...ledger.tokens },
     estimatedGeminiCostUsd: ledger.geminiCostKnown ? Math.round(ledger.geminiCostUsd * 1e8) / 1e8 : null,
     latencyMs: Math.round(performance.now() - ledger.startedAt),

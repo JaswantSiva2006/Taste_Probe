@@ -23,6 +23,7 @@
     "smoke:gemini": "node scripts/smoke-gemini.mjs",
     "smoke:live": "node scripts/smoke-live.mjs",
     "smoke:questions-live": "node scripts/smoke-questions-live.mjs",
+    "smoke:production": "node scripts/smoke-production.mjs",
     "evaluate:questions": "vitest run tests/evaluation/question-evaluation.test.ts --reporter=verbose",
     "evaluate:question-quality": "vitest run tests/evaluation/question-quality.test.ts --reporter=verbose",
     "optimize:question-quality": "vitest run tests/evaluation/question-optimization.test.ts --reporter=verbose",

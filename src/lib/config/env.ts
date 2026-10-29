@@ -23,6 +23,8 @@ const optionalString = z
   .optional()
   .transform((v) => (v && v.trim() !== "" ? v : undefined));
 
+const optionalBool = z.enum(["true", "false"]).optional();
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   QLOO_MODE: z.enum(["mock", "live"]).default("mock"),
@@ -43,6 +45,14 @@ const EnvSchema = z.object({
   SESSION_STORE: z.enum(["memory", "redis"]).optional(),
   UPSTASH_REDIS_REST_URL: optionalString,
   UPSTASH_REDIS_REST_TOKEN: optionalString,
+
+  RATE_LIMIT_ENABLED: optionalBool,
+  RATE_LIMIT_SEARCH_MAX: int(30, 1, 500),
+  RATE_LIMIT_START_MAX: int(10, 1, 100),
+  RATE_LIMIT_ANSWER_MAX: int(30, 1, 300),
+  RATE_LIMIT_WINDOW_SECONDS: int(600, 10, 86_400),
+  TRUSTED_PROXY_IP_HEADER: optionalString,
+  ENABLE_EXPENSIVE_OPERATIONS: bool(true),
 
   MAX_QUESTIONS: int(MAX_QUESTIONS_LIMIT, 1, MAX_QUESTIONS_LIMIT),
   MAX_QLOO_CALLS_PER_SESSION: int(6, 1, 50),
@@ -66,6 +76,14 @@ export type AppConfig = {
   llm: { provider: string; model?: string; apiKey?: string; temperature: number; timeoutMs: number };
   session: { signingSecret: string; ttlSeconds: number; secretIsEphemeral: boolean };
   sessionStore: { kind: "memory" } | { kind: "redis"; url: string; token: string };
+  rateLimit: {
+    enabled: boolean;
+    searchMax: number;
+    startMax: number;
+    answerMax: number;
+    windowSeconds: number;
+    trustedProxyIpHeader?: string;
+  };
   limits: {
     maxQuestions: number;
     maxQlooCallsPerSession: number;
@@ -81,6 +99,7 @@ export type AppConfig = {
     cacheTtlSeconds: number;
     evaluationLogging: boolean;
     agentTracing: boolean;
+    expensiveOperations: boolean;
   };
   sentryDsn?: string;
 };
@@ -164,11 +183,30 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       `SESSION_SIGNING_SECRET must be at least ${MIN_SECRET_LENGTH} characters`,
     );
   }
+  if (e.NODE_ENV === "production" && e.QLOO_MODE === "live") {
+    const missing = [
+      !e.QLOO_API_KEY && "QLOO_API_KEY",
+      !e.LLM_MODEL && "LLM_MODEL",
+      !e.GOOGLE_API_KEY && "GOOGLE_API_KEY",
+    ].filter(Boolean);
+    if (missing.length) throw new AppError("CONFIG_ERROR", 500, `Missing production configuration: ${missing.join(", ")}`);
+    if (e.LLM_PROVIDER !== "google" && e.LLM_PROVIDER !== "gemini") {
+      throw new AppError("CONFIG_ERROR", 500, "LLM_PROVIDER must be google in live production");
+    }
+  }
 
   return {
     nodeEnv: e.NODE_ENV,
     mode: e.QLOO_MODE,
     sessionStore: resolveSessionStore(e),
+    rateLimit: {
+      enabled: e.RATE_LIMIT_ENABLED === undefined ? e.NODE_ENV === "production" : e.RATE_LIMIT_ENABLED === "true",
+      searchMax: e.RATE_LIMIT_SEARCH_MAX,
+      startMax: e.RATE_LIMIT_START_MAX,
+      answerMax: e.RATE_LIMIT_ANSWER_MAX,
+      windowSeconds: e.RATE_LIMIT_WINDOW_SECONDS,
+      trustedProxyIpHeader: e.TRUSTED_PROXY_IP_HEADER,
+    },
     qloo: { apiKey: e.QLOO_API_KEY, baseUrl: e.QLOO_BASE_URL, timeoutMs: e.QLOO_TIMEOUT_MS },
     llm: {
       provider: e.LLM_PROVIDER,
@@ -193,6 +231,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       cacheTtlSeconds: e.CACHE_TTL_SECONDS,
       evaluationLogging: e.ENABLE_EVALUATION_LOGGING,
       agentTracing: e.ENABLE_AGENT_TRACING,
+      expensiveOperations: e.ENABLE_EXPENSIVE_OPERATIONS,
     },
     sentryDsn: e.SENTRY_DSN,
   };
