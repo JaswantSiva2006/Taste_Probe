@@ -70,6 +70,19 @@ It launches `next start` with production configuration and exercises real HTTP h
 - Provider billing enforcement remains external.
 - The experimental `llm_grounded` question mode remains opt-in; S9 does not change its default.
 
-## Current release blocker
+## Release status (S9.5)
 
-The bounded production smoke was attempted after all offline gates passed and stopped before starting the server because `SESSION_SIGNING_SECRET` is absent from the local production-smoke environment. No live Qloo, Gemini, or Redis operation was attempted. Configure a stable deployment secret of at least 32 characters, rebuild if required by the deployment workflow, and rerun `npm run smoke:production` once.
+The earlier blocker (a missing local `SESSION_SIGNING_SECRET`) no longer applies.
+
+S9.5 ran the **complete browser experience** on the production build (`next start`, `NODE_ENV=production`, `QLOO_MODE=live`) with real Qloo, real Gemini and real Upstash Redis. All three enabled journeys (movie → book, music_artist → book, movie → music_artist) passed:
+- search, explicit selection, start, grounded question, answer, finish, START HERE, "Why this starting point?" and restart;
+- Redis revisions 0→1→2;
+- no browser errors and no credential exposure.
+
+The campaign used 12 Qloo calls, 8 Gemini calls and about $0.0051 in total. Details are in `docs/live-browser-verification.md`.
+
+There is no remaining blocker for S10. Before announcing, repeat one bounded `npm run qa:live -- --confirm-live --journeys movie-book` (or `npm run smoke:production`) against the deployed environment.
+
+Regression commands:
+- `npm run qa` is free mock browser QA.
+- `npm run qa:live -- --confirm-live` is the paid, budgeted live browser QA, with a persistent ledger and a free `--rehearse` mode.

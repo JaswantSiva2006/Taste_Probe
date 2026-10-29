@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
+import { axeScan, begin, chooseSource, chooseWorld, hygiene, searchAndSelect } from "./lib/ui-flow.mjs";
 
 const arg = (flag, fallback) => {
   const i = process.argv.indexOf(flag);
@@ -28,32 +29,15 @@ const reduced = process.argv.includes("--reduced-motion");
 await mkdir(out, { recursive: true });
 
 const report = [];
+/** axe-core results for key screens at 375 and 1440 (automated only; not a WCAG claim). */
+const a11y = [];
+const audit = async (page, width, label) => {
+  if (width === 375 || width === 1440) a11y.push({ width, label, violations: await axeScan(page) });
+};
 const passed = [];
 const browser = await chromium.launch();
 const heightOf = (w) => (w >= 1024 ? 900 : w === 768 ? 1024 : 812);
 
-async function hygiene(page, label) {
-  return page.evaluate((label) => {
-    const vw = document.documentElement.clientWidth;
-    const overflow = document.documentElement.scrollWidth > vw + 1;
-    const offenders = [...document.querySelectorAll("body *")]
-      .filter((el) => {
-        const r = el.getBoundingClientRect();
-        const s = getComputedStyle(el);
-        return s.display !== "none" && r.width > 0 && (r.right > vw + 2 || r.left < -2) && s.position !== "fixed" && !el.closest(".tp-sr");
-      })
-      .slice(0, 6)
-      .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)}`);
-    const broken = [...document.images].filter((i) => i.complete && i.naturalWidth === 0).map((i) => i.src);
-    const smallTargets = [...document.querySelectorAll("button, a, input:not([type=radio]), summary, label.tp-world, label.tp-chip")]
-      .filter((el) => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && (r.height < 24 || r.width < 24);
-      })
-      .map((el) => (el.textContent || el.getAttribute("aria-label") || el.tagName).trim().slice(0, 30));
-    return { label, overflow, offenders, broken, smallTargets, h1: document.querySelectorAll("h1").length };
-  }, label);
-}
 
 async function open(width, opts = {}) {
   const context = await browser.newContext({ viewport: { width, height: heightOf(width) }, reducedMotion: reduced ? "reduce" : "no-preference" });
@@ -107,47 +91,6 @@ async function expectWorldsFromHealth(page) {
   return health.data.capabilities.pairs;
 }
 
-async function chooseWorld(page, label, viaKeyboard = false) {
-  const radio = page.getByRole("radio", { name: new RegExp(`^${label}`) });
-  if (viaKeyboard) {
-    await radio.focus();
-    await page.keyboard.press("Space");
-  } else {
-    await page.locator(".tp-world", { hasText: label }).click();
-  }
-  assert.equal(await radio.isChecked(), true, `${label} chosen`);
-  await page.waitForSelector(".tp-step--anchor");
-}
-
-async function chooseSource(page, label) {
-  const radio = page.getByRole("radio", { name: label, exact: true });
-  if (!(await radio.isChecked())) await page.locator(".tp-chip", { hasText: label }).click();
-  assert.equal(await radio.isChecked(), true, `${label} chosen as anchor domain`);
-  await page.waitForSelector("#tp-anchor");
-}
-
-async function searchAndSelect(page, query, exactName, viaKeyboard = false) {
-  await page.fill("#tp-anchor", query);
-  await page.press("#tp-anchor", "Enter");
-  await page.waitForSelector(".tp-ticket");
-  assert.equal(await page.locator('.tp-ticket[aria-pressed="true"]').count(), 0, "a search never auto-selects");
-  assert.ok(await page.getByRole("button", { name: /^Pick your|^Begin with/ }).isDisabled(), "cannot start before an explicit selection");
-  const exact = page.locator(".tp-ticket").filter({ has: page.locator(".tp-ticket__title", { hasText: new RegExp(`^${exactName.replace(/[()]/g, "\\$&")}$`) }) });
-  if (viaKeyboard) {
-    await exact.focus();
-    await page.keyboard.press("Space");
-  } else {
-    await exact.click();
-  }
-  assert.equal(await exact.getAttribute("aria-pressed"), "true");
-}
-
-async function begin(page) {
-  await page.getByRole("button", { name: /^Begin with/ }).click();
-  await page.waitForSelector("#tp-question, #tp-programme-title, .tp-error");
-  if (await page.locator(".tp-error").count()) throw new Error(`start failed in the UI: ${await page.textContent(".tp-error")}`);
-}
-
 /** Finale assertions shared by every journey. */
 async function expectFinale(page, responses, { target, minFeatured = 1 }) {
   await page.waitForSelector("#tp-programme-title");
@@ -183,6 +126,7 @@ for (const width of widths) {
   const { page, shot, requests, responses, state } = s;
   await shot("01-landing-fold", false);
   await shot("01-landing-full");
+  await audit(page, width, "landing");
   await expectWorldsFromHealth(page);
   assert.equal(await page.locator(".tp-step--anchor").count(), 0, "anchor step waits for a destination");
 
@@ -191,7 +135,7 @@ for (const width of widths) {
   assert.deepEqual(sources, ["a movie", "a music artist"], "Books accepts exactly the server's sources");
   await chooseSource(page, "a movie");
   await shot("02-anchor-step");
-  await searchAndSelect(page, "Interstellar", "Interstellar", true);
+  await searchAndSelect(page, "Interstellar", "Interstellar", { viaKeyboard: true });
   assert.equal(requests.search.at(-1), "movie", "search uses the selected source type");
   await shot("03-selected");
 
@@ -205,6 +149,7 @@ for (const width of widths) {
   assert.equal(await page.evaluate(() => document.activeElement?.id), "tp-question", "focus moves to the question");
   assert.ok((await page.locator(".tp-shelf__item").count()) > 0, "candidate cards render");
   await shot("04-question-1");
+  await audit(page, width, "question");
 
   await page.keyboard.press("Tab");
   const focused = await page.evaluate(() => ({ text: document.activeElement?.textContent, outline: getComputedStyle(document.activeElement).outlineStyle }));
@@ -240,6 +185,7 @@ for (const width of widths) {
   await page.getByRole("button", { name: "Show my way in" }).click();
   await expectFinale(page, responses, { target: "book", minFeatured: 2 });
   await shot("07-way-in");
+  await audit(page, width, "way-in (explanation open)");
   await shot("07-way-in-fold", false);
   const intent = page.getByRole("button", { name: /I’ll try this/ });
   await intent.click();
@@ -328,6 +274,49 @@ for (const width of [375, 1440]) {
 
 // ---------------------------------------------------------------- 5. error recovery
 
+for (const width of [375, 1440]) {
+  // S9.5: slow and broken image hosts (seen live) never leave an empty frame or a false caption.
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  let releaseSlow;
+  const slowGate = new Promise((r) => (releaseSlow = r));
+  const s = await open(width, {
+    before: async (page) => {
+      await page.route("https://covers.example/slow.png", async (r) => {
+        await slowGate;
+        await r.fulfill({ status: 200, contentType: "image/png", body: PNG });
+      });
+      await page.route("https://covers.example/broken.png", (r) => r.abort());
+      await page.route("**/api/discovery/start", async (route) => {
+        const res = await route.fetch();
+        const json = await res.json();
+        json.data.recommendations[0].candidate.imageUrl = "https://covers.example/slow.png";
+        json.data.recommendations[1].candidate.imageUrl = "https://covers.example/broken.png";
+        await route.fulfill({ response: res, json });
+      });
+    },
+  });
+  const { page, shot, state } = s;
+  state.induced = true; // the deliberately broken image logs a load error
+  await chooseWorld(page, "Books");
+  await chooseSource(page, "a movie");
+  await searchAndSelect(page, "Interstellar", "Interstellar");
+  await begin(page);
+  const first = page.locator(".tp-shelf__item").nth(0).locator(".tp-art");
+  const second = page.locator(".tp-shelf__item").nth(1).locator(".tp-art");
+  await second.locator(".tp-art__note").waitFor();
+  assert.equal(await first.getAttribute("data-art-state"), "loading", "slow cover is still loading");
+  assert.ok(await first.locator(".tp-art__title").isVisible(), "a loading cover shows the typeset title, not an empty frame");
+  assert.equal(await first.locator(".tp-art__note").count(), 0, "no false 'no cover' caption while loading");
+  assert.equal(await second.getAttribute("data-art-state"), "none", "a broken cover falls back");
+  assert.match(await second.locator(".tp-art__note").textContent(), /No cover from Qloo/);
+  await shot("15-cover-loading", false);
+  releaseSlow();
+  await page.waitForFunction(() => document.querySelector(".tp-shelf__item .tp-art")?.getAttribute("data-art-state") === "loaded");
+  assert.ok(await first.locator("img").evaluate((i) => i.complete && i.naturalWidth > 0), "the cover appears once its host answers");
+  passed.push(`${width}: slow/broken cover handling`);
+  await s.close();
+}
+
 {
   // capability load failure -> nothing offered -> retry
   let fail = true;
@@ -406,14 +395,19 @@ for (const width of [375, 1440]) {
 }
 
 await browser.close();
-await writeFile(resolve(out, "qa-report.json"), JSON.stringify({ passed, report }, null, 2));
+await writeFile(resolve(out, "qa-report.json"), JSON.stringify({ passed, report, a11y }, null, 2));
 
-const problems = report.filter((r) => r.overflow || r.broken?.length || r.errors?.length);
+const severe = a11y.flatMap((a) => a.violations.filter((v) => v.impact === "serious" || v.impact === "critical").map((v) => ({ ...v, width: a.width, label: a.label })));
+for (const a of a11y) {
+  const summary = a.violations.map((v) => `${v.id}(${v.impact},${v.nodes})`).join(" ") || "no violations";
+  console.log(`axe ${a.width} ${a.label}: ${summary}`);
+}
+const problems = [...report.filter((r) => r.overflow || r.broken?.length || r.errors?.length), ...severe];
 for (const r of report.filter((r) => r.label)) {
   const flags = [r.overflow && `OVERFLOW ${r.offenders.join(",")}`, r.broken.length && `BROKEN ${r.broken.length}`, r.smallTargets.length && `small:${r.smallTargets.join("|")}`].filter(Boolean);
   if (flags.length) console.log(`${r.width} ${r.label}: ${flags.join(" ; ")}`);
 }
 for (const r of report.filter((r) => r.errors?.length)) console.log(`${r.width} console/page errors: ${r.errors.join(" | ")}`);
 for (const p of passed) console.log(`PASS ${p}`);
-console.log(`UI QA: ${passed.length} journeys passed, ${problems.length} hygiene problem(s). Screenshots: ${out}`);
+console.log(`UI QA: ${passed.length} journeys passed, ${problems.length} problem(s) (hygiene + serious/critical axe). Screenshots: ${out}`);
 process.exitCode = problems.length ? 1 : 0;

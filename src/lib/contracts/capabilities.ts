@@ -149,7 +149,9 @@ const PAIR_STATUS: Partial<Record<PairKey, { enabled: boolean; evidence: Capabil
   "music_artist->book": { enabled: true, evidence: "FULL_E2E_VERIFIED" },
   "movie->music_artist": { enabled: true, evidence: "FULL_E2E_VERIFIED" },
   // S9.3 probe: Insights from a verified movie returned 10/10 correctly typed, tagged entities. No session yet.
-  "movie->tv_show": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
+  // S9.5: full live HTTP lifecycle passed (Redis, Gemini, positive answer → local rerank). Kept
+  // disabled until the browser journey is verified too, the S9.5 bar for public pairs.
+  "movie->tv_show": { enabled: false, evidence: "FULL_E2E_VERIFIED" },
   "movie->video_game": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
   "movie->podcast": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
 };

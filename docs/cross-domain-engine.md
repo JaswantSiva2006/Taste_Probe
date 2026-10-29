@@ -62,7 +62,8 @@ Observed response shapes:
 | movie → book | `FULL_E2E_VERIFIED` (S7/S9 reference; not rerun live in S9.3, see §6) | **yes** |
 | music_artist → book | `FULL_E2E_VERIFIED` (S9.3 live session) | **yes** (new) |
 | movie → music_artist | `FULL_E2E_VERIFIED` (S9.3 live session) | **yes** (new) |
-| movie → tv_show, movie → video_game, movie → podcast | `VERIFIED_INSIGHTS` (live Search + Insights, no session) | no |
+| movie → tv_show | `FULL_E2E_VERIFIED` over HTTP in S9.5 (see `docs/live-browser-verification.md`); browser journey not yet run | no |
+| movie → video_game, movie → podcast | `VERIFIED_INSIGHTS` (live Search + Insights, no session) | no |
 | The other 24 directed pairs | `OFFLINE_MATRIX` (engine behaviour with fixtures only) | no |
 | Same-domain pairs, unknown domains | unregistered | never |
 

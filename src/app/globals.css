@@ -996,11 +996,31 @@ body {
 .tp-art--lg {
   width: clamp(120px, 22vw, 200px);
 }
+.tp-art {
+  position: relative;
+}
 .tp-art img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+/* while a slow image host is serving, the image sits over the typeset board and fades in */
+.tp-art[data-art-state="loading"] .tp-art__img {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+.tp-art[data-art-state="loaded"] .tp-art__img {
+  animation: tp-art-in var(--tp-med) var(--tp-ease) both;
+}
+@keyframes tp-art-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .tp-art__board {
   display: grid;
