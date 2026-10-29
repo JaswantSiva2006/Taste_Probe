@@ -103,7 +103,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `npm run test:session` | Session replay, concurrency, store-contract and fail-closed config suites only. |
 | `npm run test:redis` | Optional: runs the store contract against a real Upstash database (needs `UPSTASH_*`). |
 | `npm run build` | Production build. |
-| `npm run smoke:mock` | HTTP end-to-end smoke test (below). |
+| `npm run smoke:mock` (alias `npm run smoke`) | HTTP end-to-end smoke test (below). |
+| `npm run qa:ui -- --url http://127.0.0.1:3000` | Browser QA against a running `dev:mock` server. Drives the full UI flow at 320/375/768/1024/1440, checks keyboard, overflow, broken images and console errors, and saves screenshots to `.artifacts/ui/`. Needs `npx playwright install chromium` once. |
 | `npm run smoke:qloo` | Real Qloo-only HTTP smoke: Search, selection validation, Insights, and provenance (3 requests, 0 Gemini calls). |
 | `npm run smoke:live` | **Live HTTP E2E** through the real app: search → start → answer → finish with real Qloo and real Gemini (≤ 5 Qloo, ≤ 3 Gemini requests, < $0.05). It fails rather than raising a limit. |
 | `npm run smoke:gemini` | Live Gemini agent smoke: one real function-calling decision (≤ 2 requests, < $0.01, 0 Qloo/Redis calls). |
@@ -126,6 +127,18 @@ watch the ▲/▼ markers, then continue or press **Finish now**.
 - To smoke an already-running mock server instead: `SMOKE_BASE_URL=http://localhost:3000 npm run smoke:mock`.
   A `next dev` instance already running in this folder will block the spawned one, so stop it first or use
   `SMOKE_BASE_URL`.
+
+## Interface (S8)
+
+The "Intertitle" direction treats a screening room as the stage:
+- An original SVG projector throws its beam onto a bookshelf.
+- Each adaptive question appears as a silent-film intertitle.
+- The finale is a printed programme.
+
+Design rationale, tokens, the asset register, the QA log and the scorecard are in
+[docs/ui-design-brief.md](docs/ui-design-brief.md). The UI uses only the existing API client and response fields.
+Labels are truthful: Qloo reretrieval vs local reranking, Gemini vs deterministic fallback, and synthetic vs Qloo data.
+Components live in `src/components/`, and pure presentation helpers in `src/lib/ui/` (unit-tested).
 
 ## Live API probe (S2)
 

@@ -14,6 +14,9 @@ next-env.d.ts
 # live probe output (sanitized summaries only; never commit)
 /.probe/
 
+# UI QA screenshots (development artifacts)
+/.artifacts/
+
 # environment files (never commit credentials; .env.example is intentionally tracked)
 .env
 .env.local

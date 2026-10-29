@@ -16,7 +16,9 @@
     "test": "vitest run",
     "test:session": "vitest run tests/unit/session-security.test.ts tests/unit/session-store.test.ts tests/unit/session-config.test.ts",
     "test:redis": "cross-env RUN_REDIS_LIVE_TEST=1 vitest run tests/live/redis-store.live.test.ts",
+    "smoke": "node scripts/smoke-mock.mjs",
     "smoke:mock": "node scripts/smoke-mock.mjs",
+    "qa:ui": "node scripts/ui-qa.mjs",
     "smoke:qloo": "node scripts/smoke-qloo.mjs",
     "smoke:gemini": "node scripts/smoke-gemini.mjs",
     "smoke:live": "node scripts/smoke-live.mjs",
@@ -40,6 +42,7 @@
     "eslint": "9.39.5",
     "eslint-config-next": "16.4.3",
     "fengari": "0.1.5",
+    "playwright": "1.64.1",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "vitest": "5.0.5"
