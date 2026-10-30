@@ -84,7 +84,10 @@ import {
 } from "./questions";
 import { orderOf, rankCandidates, sameOrder } from "./ranking";
 import { evaluateStop } from "./stop";
-import { initializeAdaptivePool, synchronizeAdaptivePool } from "./adaptive-pool";
+import { createQueryPlan, initializeAdaptivePool, mergeAdaptiveCandidates, synchronizeAdaptivePool, type QueryPlan } from "./adaptive-pool";
+import { SEED_THRESHOLD, candidateFromSearch, emptyWalk, entryRelevance, frontier, planWalk, relevanceContext, relevanceOf, walkPlanAllowed, type WalkState } from "@/lib/music/taste-walk";
+import { nameKey } from "@/lib/music/youtube-data";
+import { RecommendationCandidateSchema, type ListeningView, type RecommendationCandidate } from "@/lib/contracts";
 
 /** G1/G2 orchestration: wires provider, normalizer, questions, agent and session. */
 
@@ -561,7 +564,7 @@ function toView(
         }
       : {}),
     exploration: explorationOf(deps, state, finished ? recommendations.map((r) => r.candidate.entityId) : []),
-    ...(state.listening ? { listening: listeningViewOf(deps.config.features.adaptiveListening ? state.listening : { ...state.listening, upNext: null }, (id) => candidateName(state, id)) } : {}),
+    ...(state.listening ? { listening: { ...listeningViewOf(deps.config.features.adaptiveListening ? state.listening : { ...state.listening, upNext: null }, (id) => candidateName(state, id)), ...walkView(state) } } : {}),
   };
 }
 
@@ -1108,12 +1111,15 @@ function listeningArtistOrder(deps: DiscoveryDeps, state: SessionState): string[
   return [...new Set([...shown, ...all])];
 }
 
+/** S9.18 identity context: the starting point and the reservoir Qloo placed around these artists. */
+const identityContext = (state: SessionState) => [state.seed.name, ...state.candidates.map((c) => c.name)].slice(0, 91);
+
 async function songResolution(deps: DiscoveryDeps, state: SessionState, artistId: string) {
   const c = state.candidates.find((x) => x.entityId === artistId);
   if (!c) return null;
   const resolution = await resolveArtistVideo(
     { entityId: c.entityId, name: c.name, provenance: c.evidence.source },
-    { explorationId: state.session.sessionId, now: new Date(nowOf(deps)), momentReview: deps.config.music.momentReview, dynamic: deps.musicLookup },
+    { explorationId: state.session.sessionId, now: new Date(nowOf(deps)), momentReview: deps.config.music.momentReview, dynamic: deps.musicLookup, context: identityContext(state) },
   );
   return resolution;
 }
@@ -1183,7 +1189,7 @@ async function chooseSong(deps: DiscoveryDeps, state: SessionState, listening: L
   return { option: chosen, selection: { mode: "GEMINI", reasonCode: r.reasonCode, fallbackReason: null, eligibleCount: count } };
 }
 
-type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number; supplyUpdates: { state?: SessionState; retrievalAttempted?: boolean }; affinityRefreshed?: boolean };
+type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number; supplyUpdates: { state?: SessionState; retrievalAttempted?: boolean }; affinityRefreshed?: boolean; walked?: boolean };
 
 const geminiRemaining = (t: Turn) => t.deps.config.limits.maxGeminiRequestsPerExploration - (t.state.session.geminiRequestCount ?? 0) - t.ledger.geminiRequests;
 
@@ -1191,10 +1197,152 @@ const geminiRemaining = (t: Turn) => t.deps.config.limits.maxGeminiRequestsPerEx
  * S9.17 resolution priority: which unresolved artists deserve a YouTube lookup first.
  * Model affinity and the listener's own reactions lead; Qloo's order breaks ties.
  */
-function artistPriority(l: ListeningState, ids: string[]): (id: string) => number {
+function artistPriority(state: SessionState, l: ListeningState, ids: string[]): (id: string) => number {
   const position = new Map(ids.map((id, i) => [id, i]));
   const signals = artistSignals(l);
-  return (id) => 0.5 * modelAffinity(l, id) + 0.3 * (signals.get(id)?.score ?? 0) + 0.4 * (1 - (position.get(id) ?? ids.length) / Math.max(1, ids.length));
+  // S9.18: relevance to the listener's evolving seeds replaces the static Qloo position when known.
+  const relevance = relevanceOf(state, l);
+  return (id) => 0.5 * modelAffinity(l, id) + 0.3 * (signals.get(id)?.score ?? 0) + 0.4 * (relevance.get(id)?.relevance ?? 1 - (position.get(id) ?? ids.length) / Math.max(1, ids.length));
+}
+
+/** S9.18 projection: the path to the current artist and the trail of explored neighbourhoods. */
+function walkView(state: SessionState): Partial<Pick<ListeningView, "path" | "trail">> {
+  if (!state.walk || !state.listening) return {};
+  const named = (ids: string[], max = 3) => ids.filter((id) => state.candidates.some((c) => c.entityId === id)).slice(0, max).map((id) => ({ entityId: id, name: candidateName(state, id) }));
+  const trail = state.walk.seeds.filter((s) => s.status === "expanded").map((s) => s.entityId);
+  const current = state.listening.currentArtistId;
+  let path: ListeningView["path"] = null;
+  const scouted = current ? state.walk.seeds.find((s) => s.entityId === current && s.origin === "scouted") : undefined;
+  if (scouted) path = { kind: "SCOUT", via: named(scouted.parentIds) };
+  else if (current) {
+    const r = relevanceOf(state, state.listening).get(current);
+    if (r && r.kind !== "starting_point" && r.kind !== "SCOUT") path = { kind: r.kind, via: named(r.seedIds) };
+  }
+  return { path: path && path.via.length ? path : null, trail: named(trail, 8) };
+}
+
+/**
+ * S9.18 taste-graph walk step. When the listener's reactions earn a new seed (or a new
+ * combination of seeds), Qloo is asked for that seed's own neighbourhood (EXPAND) or for
+ * the combination (BLEND), and the bounded reservoir is re-fused by relevance to the
+ * listener's current seeds. The walk planner (Gemini, optional) may choose a different
+ * step and scout artist names, which only count once Qloo identifies them exactly.
+ * One insights request and at most two scout searches per turn, from a separate
+ * per-exploration allowance; failures keep the listener's feedback.
+ */
+async function walkStep(t: Turn, l: ListeningState): Promise<SessionState> {
+  const { deps } = t;
+  let state = t.state;
+  if (!deps.config.features.adaptivePool || !state.adaptivePool || state.session.targetType !== "music_artist") return state;
+  const walk: WalkState = structuredClone(state.walk ?? emptyWalk());
+  const remaining = () => deps.config.limits.maxQlooWalkCalls - walk.calls;
+  if (remaining() < 1) return state;
+  const planned = planWalk({ ...state, walk }, l);
+  if (!planned) return state;
+  const signals = artistSignals(l);
+  const rejected = new Set(state.session.rejectedEntityIds);
+  const seedIds = [...signals].filter(([id, x]) => x.score >= SEED_THRESHOLD && !rejected.has(id) && state.candidates.some((c) => c.entityId === id)).sort((a, b) => b[1].score - a[1].score).map(([id]) => id).slice(0, 8);
+  // Considered seeds are registered, so the same evidence never re-triggers a step.
+  for (const id of frontier({ ...state, walk }, l)) if (!walk.seeds.some((x) => x.entityId === id)) walk.seeds.push({ entityId: id, origin: "listened", status: "frontier", parentIds: [], at: t.at });
+
+  let plan: { action: "EXPAND" | "BLEND" | "SCOUT" | "HOLD"; seedIds: string[] } = planned;
+  let scoutNames: string[] = [];
+  let mode: "GEMINI" | "DETERMINISTIC" = "DETERMINISTIC";
+  let reason = planned.reason;
+  const selector = deps.songSelector;
+  if (selector?.planWalk && geminiRemaining(t) >= 2) {
+    t.ledger.geminiRequests += 1;
+    t.ledger.geminiDecisionRequests += 1;
+    try {
+      const expanded = new Set(walk.seeds.filter((x) => x.status === "expanded").map((x) => x.entityId));
+      const r = await selector.planWalk({
+        sessionRef: state.session.sessionId.slice(0, 8),
+        anchor: { name: state.seed.name, domain: state.seed.entityType },
+        seeds: seedIds.map((id) => ({ entityId: id, name: candidateName(state, id), strength: signals.get(id)!.strong ? "strong" : "weak", expanded: expanded.has(id) })),
+        disliked: [...signals].filter(([, x]) => x.score < 0).map(([id]) => candidateName(state, id)).slice(0, 12),
+        known: [...relevanceOf(state, l)].sort((a, b) => b[1].relevance - a[1].relevance).map(([id]) => candidateName(state, id)).slice(0, 60),
+        qlooCallsRemaining: remaining(),
+      });
+      t.ledger.tokens.input += r.usage.promptTokens; t.ledger.tokens.output += r.usage.outputTokens; t.ledger.tokens.thinking += r.usage.thoughtTokens;
+      if (r.costUsd === null) t.ledger.geminiCostKnown = false; else t.ledger.geminiCostUsd += r.costUsd;
+      if (r.ok) {
+        scoutNames = r.scoutNames;
+        mode = "GEMINI";
+        reason = r.reasonCode;
+        // The model may choose the step, but never a redundant query: those fall back to the deterministic plan.
+        if (r.action === "SCOUT" || r.action === "HOLD" || walkPlanAllowed({ ...state, walk }, l, { action: r.action, seedIds: r.seedIds })) plan = { action: r.action, seedIds: r.seedIds };
+        else reason = "model_plan_redundant";
+      }
+    } catch { /* accounted; deterministic plan stands */ }
+  }
+  const knownNames = new Set(state.candidates.map((c) => nameKey(c.name)));
+  scoutNames = scoutNames.filter((n) => !knownNames.has(nameKey(n)) && nameKey(n) !== nameKey(state.seed.name));
+  const live: QlooProvider = countingProvider(deps.provider, t.ledger);
+  const protectedIds = [...new Set([...(l.currentArtistId ? [l.currentArtistId] : []), ...l.saved.map((x) => x.artist.qlooId), ...seedIds])];
+  let added = 0;
+  const merge = (incoming: RecommendationCandidate[], queryPlan: QueryPlan, requestId: string, kind: WalkState["queries"][number]["kind"], querySeeds: string[], calls: number) => {
+    const query = { queryHash: queryPlan.queryHash, kind, seedIds: querySeeds, added: 0, at: t.at, requestId: requestId.slice(0, 200) };
+    const ctx = relevanceContext({ ...state, walk }, l, [query]);
+    const merged = mergeAdaptiveCandidates({
+      current: state.candidates, incoming, pool: state.adaptivePool!, plan: queryPlan, requestId, round: state.session.round ?? 1, at: t.at, qlooCalls: calls,
+      protectedIds, retentionScore: (entry) => entryRelevance(entry, ctx).relevance,
+    });
+    walk.queries = [...walk.queries, { ...query, added: merged.addedIds.length }].slice(-60);
+    state = { ...state, candidates: merged.candidates, adaptivePool: merged.pool };
+    added += merged.addedIds.length;
+    return merged.addedIds;
+  };
+
+  if ((plan.action === "EXPAND" || plan.action === "BLEND") && plan.seedIds.length) {
+    const seeds = [...plan.seedIds].sort();
+    // Already-heard and rejected artists are excluded; everything else may return again,
+    // because agreement between seeds is exactly the evidence the fusion rewards.
+    const verifiedHost = deps.config.mode === "mock" || new URL(deps.config.qloo.baseUrl ?? "https://hackathon.api.qloo.com").hostname === "hackathon.api.qloo.com";
+    const knownIds = new Set([...state.session.anchorIds, ...state.candidates.map((c) => c.entityId)]);
+    const exclusions = verifiedHost ? [...new Set([...state.session.rejectedEntityIds, ...l.encounters.map((e) => e.artistId)])].filter((id) => knownIds.has(id) && !seeds.includes(id)).slice(0, 90) : [];
+    const queryPlan = createQueryPlan({
+      family: plan.action === "EXPAND" ? "WALK_NEIGHBOURHOOD" : "WALK_BLEND", targetType: "music_artist", seedEntityIds: seeds, excludedCandidateIds: exclusions,
+      take: 50, includeExplainability: deps.config.mode === "live", knownEntityIds: knownIds, knownTagIds: new Set(), executable: true,
+    });
+    if (!walk.queries.some((q) => q.kind !== "SCOUT" && [...q.seedIds].sort().join("+") === seeds.join("+"))) {
+      walk.calls += 1; // charged before the request, failures included
+      try {
+        const result = await live.getRecommendations({ seedEntityIds: seeds, targetType: "music_artist", take: 50, excludedEntityIds: exclusions, includeExplainability: queryPlan.includeExplainability, maxAttempts: 1 });
+        walk.calls += Math.max(0, result.requestCount - 1);
+        const normalized = normalizeTargetCandidates(result, seeds, 50, { targetType: "music_artist", provenance: deps.config.mode === "live" ? "qloo" : "mock" });
+        merge(normalized.candidates, queryPlan, result.requestId, plan.action === "EXPAND" ? "NEIGHBOURHOOD" : "BLEND", seeds, Math.max(1, result.requestCount));
+      } catch { reason = "walk_query_failed"; }
+    }
+    for (const id of seeds) {
+      const seed = walk.seeds.find((x) => x.entityId === id);
+      if (seed) seed.status = "expanded"; else walk.seeds.push({ entityId: id, origin: "listened", status: "expanded", parentIds: [], at: t.at });
+    }
+  }
+
+  // Scouted names are only text: an artist joins the reservoir when Qloo's own search
+  // returns exactly that name as a music artist.
+  const parents = (plan.seedIds.length ? plan.seedIds : seedIds).slice(0, 3);
+  const found: string[] = [];
+  for (const name of scoutNames.slice(0, 2)) {
+    if (remaining() < 1) break;
+    walk.calls += 1;
+    try {
+      const result = await live.searchEntities(name, "music_artist");
+      const raw = result.payload.results.find((r) => nameKey(r.name) === nameKey(name) && normalizeEntity(r, result.provenance)?.entityType === "music_artist");
+      if (!raw || state.candidates.some((c) => c.entityId === raw.entity_id) || state.session.anchorIds.includes(raw.entity_id)) continue;
+      const candidate = RecommendationCandidateSchema.parse(candidateFromSearch(raw, result.requestId, result.provenance, 1));
+      const knownIds = new Set([...state.session.anchorIds, ...state.candidates.map((c) => c.entityId), candidate.entityId]);
+      const queryPlan = createQueryPlan({ family: "AGENT_SCOUT", targetType: "music_artist", seedEntityIds: parents.filter((id) => knownIds.has(id)), cursor: `scout:${nameKey(name)}`, take: 1, includeExplainability: false, knownEntityIds: knownIds, knownTagIds: new Set(), executable: true });
+      if (merge([candidate], queryPlan, result.requestId, "SCOUT", parents, 1).length) {
+        found.push(raw.name);
+        walk.seeds.push({ entityId: candidate.entityId, origin: "scouted", status: "frontier", parentIds: parents, at: t.at });
+      }
+    } catch { /* a failed lookup only costs its own request */ }
+  }
+  walk.seeds = walk.seeds.slice(-60);
+  walk.decisions = [...walk.decisions, { at: t.at, revision: t.revision, action: plan.action, seedIds: plan.seedIds.slice(0, 6), scouted: found.slice(0, 3), mode, reason: reason.slice(0, 64), added }].slice(-40);
+  logEvent("info", "discovery.walk", { requestId: deps.requestId, action: plan.action, mode, reason, seeds: plan.seedIds.length, scouted: found.length, added, walkCalls: walk.calls, reservoir: state.candidates.length });
+  return { ...state, walk };
 }
 
 /**
@@ -1247,6 +1395,14 @@ async function refreshArtistAffinity(t: Turn, l: ListeningState, ids: string[]):
 /** Bounded cross-artist supply. Reviewed mappings cost no lookup; dynamic attempts retain shared quotas. */
 async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = false, differentArtist = false, deepenArtistId?: string): Promise<ListeningState> {
   let l: ListeningState = { ...listening, upNext: null };
+  if (!t.walked) {
+    t.walked = true;
+    const walked = await walkStep(t, l);
+    if (walked !== t.state) {
+      t.state = walked;
+      t.supplyUpdates.state = walked;
+    }
+  }
   const inventory = [...(l.inventory ?? []), ...l.options];
   const resolutions: SupplyState["resolutions"] = (l.supply?.resolutions ?? []).filter((r) => t.state.candidates.some((c) => c.entityId === r.artistId));
   const saveResolution = (entry: SupplyState["resolutions"][number]) => {
@@ -1255,7 +1411,7 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
   };
   const ids = listeningArtistOrder(t.deps, t.state).filter((id) => !excludedArtists(t.state).has(id));
   l = await refreshArtistAffinity(t, l, ids);
-  const priority = artistPriority(l, ids);
+  const priority = artistPriority(t.state, l, ids);
   const byPriority = [...ids].sort((a, b) => priority(b) - priority(a));
   const remember = (r: NonNullable<Awaited<ReturnType<typeof songResolution>>>) => {
     const options = boundedOptionsFrom(r, 24);
@@ -1313,7 +1469,7 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
     const seen = seenVideoIds(l);
     if (new Set(inventory.filter((o) => o.artistId === deepenArtistId && !seen.has(o.videoId)).map((o) => o.videoId)).size < 3) {
       try {
-        const outcome = await lookup.lookup({ entityId: deepenArtistId, name: candidateName(t.state, deepenArtistId) }, t.state.session.sessionId, { fresh: true });
+        const outcome = await lookup.lookup({ entityId: deepenArtistId, name: candidateName(t.state, deepenArtistId) }, t.state.session.sessionId, { fresh: true, context: identityContext(t.state) });
         if (outcome.kind === "resolved") await fromOutcome(deepenArtistId, outcome);
         const entry = resolutions.find((r) => r.artistId === deepenArtistId);
         if (entry) entry.lookup = "DEEPENED";
@@ -1344,7 +1500,7 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
         const batch = ordered.filter((id) => !resolutions.some((r) => r.artistId === id && r.status === "DEFERRED")).slice(0, 6);
         const artists = batch.map((id) => ({ entityId: id, name: candidateName(t.state, id) }));
         const harvest = ids.filter((id) => !batch.includes(id) && !inventory.some((o) => o.artistId === id)).slice(0, 84).map((id) => ({ entityId: id, name: candidateName(t.state, id) }));
-        const found = await lookup.lookupBatch(artists, t.state.session.sessionId, harvest);
+        const found = await lookup.lookupBatch(artists, t.state.session.sessionId, harvest, identityContext(t.state));
         for (const artist of artists) {
           const result = found[artist.entityId];
           if (result) await fromOutcome(artist.entityId, result);
@@ -1508,7 +1664,8 @@ async function likeArtist(t: Turn, state: SessionState, artistId: string): Promi
     ...state,
     session: { ...state.session, positiveEntityIds: [...new Set([...state.session.positiveEntityIds, artistId])] },
   };
-  return expandFromArtist(t, next, artistId, state.order);
+  // With adaptive listening, the taste walk expands this artist's own neighbourhood instead.
+  return t.deps.config.features.adaptiveListening ? withOrder(next, state.order) : expandFromArtist(t, next, artistId, state.order);
 }
 
 /**
@@ -1556,7 +1713,7 @@ async function listeningTurn(deps: DiscoveryDeps, sessionToken: string, kind: st
   let next: SessionState;
   try {
     next = await run(t);
-    if (t.supplyUpdates.state) next = { ...next, candidates: t.supplyUpdates.state.candidates, adaptivePool: t.supplyUpdates.state.adaptivePool, acquisition: t.supplyUpdates.state.acquisition };
+    if (t.supplyUpdates.state) next = { ...next, candidates: t.supplyUpdates.state.candidates, adaptivePool: t.supplyUpdates.state.adaptivePool, acquisition: t.supplyUpdates.state.acquisition, ...(t.supplyUpdates.state.walk ? { walk: t.supplyUpdates.state.walk } : {}) };
     next = applyLedger(await withPreview(t, next), ledger);
     if (deps.config.features.adaptiveListening && next.listening) next = { ...next, taste: tasteOf(next, next.listening) };
   } catch (error) {
@@ -1675,9 +1832,6 @@ export async function listeningFeedback(deps: DiscoveryDeps, input: ListeningFee
         if (input.artistIntent === "LIKE_ARTIST") {
           l = withArtistFeedback(l, { artistId, action: "like_artist", at: t.at, revision: t.revision });
           state = await likeArtist(t, state, artistId);
-        } else if (!l.trackFeedback.some((f) => f.artistId === artistId && f.action === "love" && f.revision !== t.revision)) {
-          // First loved recording of this artist: widen the reservoir around them.
-          state = await expandFromArtist(t, state, artistId);
         }
         if (deps.config.features.adaptiveListening) l = await adaptiveNext({ ...t, state }, l, true, false, artistId);
         break;

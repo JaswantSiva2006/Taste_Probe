@@ -1,5 +1,21 @@
 # Release handoff
 
+## S9.18 taste-graph walk
+
+See [taste-walk.md](taste-walk.md).
+
+**What it does:** the listener's reactions turn artists into Qloo seeds. The walk expands each seed's own neighbourhood, or blends seeds across neighbourhoods, and a Gemini planner can scout names for Qloo to identify.
+
+**How it decides:**
+- the reservoir is re-fused and evicted by taste-weighted relevance;
+- a Thompson-sampling bandit balances exploiting and exploring buckets;
+- saturation and a shared plan validator stop redundant queries;
+- YouTube identity uses Qloo-context corroboration to tell namesakes apart.
+
+**Budgets:**
+- New `MAX_QLOO_WALK_CALLS=15` per exploration; 0 disables the walk. It needs `ADAPTIVE_POOL_ENABLED=true`.
+- `MAX_GEMINI_REQUESTS_PER_EXPLORATION` now defaults to 30.
+
 ## S9.17 verified supply + adaptive listening
 
 See [listening-intelligence.md](listening-intelligence.md).

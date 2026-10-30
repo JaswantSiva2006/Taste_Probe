@@ -1019,3 +1019,11 @@ h3 em,
     display: none;
   }
 }
+
+/* S9.18 taste walk: the "Through" step and the trail use the Passport's ultraviolet, never the action coral. */
+.sp-journey li[data-step="via"] .sp-journey__v { color: var(--ah-violet); }
+.sp-why__trail {
+  color: var(--ah-violet);
+  font: 500 0.78rem/1.45 var(--ah-mono);
+  letter-spacing: 0.01em;
+}

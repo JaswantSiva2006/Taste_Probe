@@ -14,6 +14,7 @@ import { AppError } from "@/lib/validation/errors";
 import { AdaptivePoolStateSchema } from "@/lib/discovery/adaptive-pool";
 import { ListeningStateSchema } from "@/lib/contracts/listening";
 import { TasteStateSchema } from "@/lib/music/adaptive-listening";
+import { WalkStateSchema } from "@/lib/music/taste-walk";
 import { signToken, verifyToken } from "./token";
 
 /** Full session state. Authoritative copy lives in the SessionStore, never in the token. */
@@ -29,6 +30,8 @@ export const SessionStateSchema = z.object({
   /** S9.12 optional listening loop; absent until the user starts listening. */
   listening: ListeningStateSchema.optional(),
   taste: TasteStateSchema.optional(),
+  /** S9.18 taste-graph walk over Qloo; absent until the listener's reactions earn a seed. */
+  walk: WalkStateSchema.optional(),
   acquisition: z.object({ returned: z.number(), normalized: z.number(), rejections: z.array(z.object({ entityId: z.string(), reason: z.string() })).max(100) }).optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;

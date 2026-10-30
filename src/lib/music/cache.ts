@@ -81,7 +81,7 @@ export function lookupCacheFor(config: AppConfig): LookupCache {
 }
 
 /** Bump whenever the verifier admits a new identity class or changes negative semantics. */
-export const RESOLVER_POLICY_VERSION = "v3-credited";
+export const RESOLVER_POLICY_VERSION = "v4-context";
 export const lookupCacheKey = (artistId: string) => `tp:yt:artist:${RESOLVER_POLICY_VERSION}:${artistId}`;
 
 /** Wraps a lookup with the per-artist cache (outermost: a hit never touches quota). */
@@ -94,7 +94,7 @@ export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicL
     return { kind: "resolved", video: all[0]!, alternates: all.slice(1) };
   };
   return {
-    ...(inner.lookupBatch ? { async lookupBatch(artists, explorationId, harvest = []) {
+    ...(inner.lookupBatch ? { async lookupBatch(artists, explorationId, harvest = [], context = []) {
       const out: Record<string, DynamicOutcome | null> = {};
       const missing = [];
       for (const artist of artists.slice(0, 6)) {
@@ -103,7 +103,7 @@ export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicL
         else missing.push(artist);
       }
       if (missing.length) {
-        const found = await inner.lookupBatch!(missing, explorationId, harvest);
+        const found = await inner.lookupBatch!(missing, explorationId, harvest, context);
         for (const artist of missing) {
           const result = found[artist.entityId] ?? null; out[artist.entityId] = result;
           // Incomplete OR-query coverage must NEVER poison a single-artist negative cache.
@@ -126,7 +126,7 @@ export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicL
     async lookup(artist, explorationId, options) {
       const hit = options?.fresh ? null : await cache.get(lookupCacheKey(artist.entityId));
       if (hit && normalizeName(hit.artistName) === normalizeName(artist.name)) return { ...hit.outcome, cached: true };
-      const fresh = await inner.lookup(artist, explorationId);
+      const fresh = await inner.lookup(artist, explorationId, options);
       // A deliberate deeper search adds to what is already known instead of replacing it.
       const outcome = fresh.kind === "resolved" && options?.fresh ? await merged(artist, fresh) : fresh;
       if (options?.fresh && outcome.kind !== "resolved") return outcome;

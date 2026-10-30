@@ -191,7 +191,7 @@ export const RecommendationUpdateSchema = z.object({
     previousDisplayedIds: z.array(z.string()), currentDisplayedIds: z.array(z.string()),
     newReservoirIds: z.array(z.string()), newlyDisplayedIds: z.array(z.string()), removedDisplayedIds: z.array(z.string()),
     qlooCallsMade: z.number().int().nonnegative(),
-    queryFamily: z.enum(["BASE", "PROFILE_REFRESH", "TAG_FOCUS", "PAGINATE", "DIVERSIFY", "VALIDATED_EXCLUSION_REFRESH"]).nullable(),
+    queryFamily: z.enum(["BASE", "PROFILE_REFRESH", "TAG_FOCUS", "PAGINATE", "DIVERSIFY", "VALIDATED_EXCLUSION_REFRESH", "WALK_NEIGHBOURHOOD", "WALK_BLEND", "AGENT_SCOUT"]).nullable(),
     retrievalOutcome: z.enum(["not_requested", "merged", "empty", "failed", "duplicate", "budget_exhausted"]),
     sessionRevision: z.number().int().nonnegative(),
   }).optional(),

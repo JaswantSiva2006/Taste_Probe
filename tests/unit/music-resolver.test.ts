@@ -4,7 +4,7 @@ import { REVIEWED_MAPPINGS, reviewedMappingFor } from "@/lib/music/mappings";
 import { resolveArtistVideo, selectMoment, type ResolveOptions } from "@/lib/music/resolver";
 import { deduplicated } from "@/lib/music/service";
 import { QLOO_ENTITY_ID, YOUTUBE_VIDEO_ID, momentWithinBounds, searchUrl, watchUrl, type ReviewedMapping } from "@/lib/music/types";
-import { createQuotaGuard, createYouTubeDataLookup, creditsArtist, matchRecording, nameKey, parseIsoDuration, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
+import { corroborates, createQuotaGuard, createYouTubeDataLookup, creditsArtist, matchRecording, nameKey, parseIsoDuration, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
 import { createMemoryRateLimitStore } from "@/lib/reliability/rate-limit";
 import { NEGATIVE_TTL_MS, RESOLVED_TTL_MS, RESOLVER_POLICY_VERSION, cachedLookup, createMemoryLookupCache, createRedisLookupCache, lookupCacheKey } from "@/lib/music/cache";
 
@@ -385,6 +385,30 @@ describe("optional YouTube Data API tier", () => {
     expect(nameKey("A.R. Example")).toBe(nameKey("AR Example"));
   });
 
+  it("S9.18: namesakes — two Topic channels resolve only through recordings corroborated by the artist's Qloo context", async () => {
+    const results = () => [
+      jsonRes(search([
+        { id: "AAAAAAAAAAA", channel: "New Artist - Topic", channelId: "T1" },
+        { id: "BBBBBBBBBBB", channel: "New Artist - Topic", channelId: "T2" },
+        { id: "CCCCCCCCCCC", channel: "Folk Label", channelId: "L1" },
+        { id: "DDDDDDDDDDD", channel: "Film Label", channelId: "L2" },
+      ])),
+      jsonRes(videos([
+        { id: "AAAAAAAAAAA", channel: "New Artist - Topic", channelId: "T1", title: "Hill Song", description: "Provided to YouTube\nHill Song · New Artist · Village Singer" },
+        { id: "BBBBBBBBBBB", channel: "New Artist - Topic", channelId: "T2", title: "City Song", description: "Provided to YouTube\nCity Song · New Artist · Famous Composer" },
+        { id: "CCCCCCCCCCC", channel: "Folk Label", channelId: "L1", title: "Hill Dance | New Artist | Village Singer" },
+        { id: "DDDDDDDDDDD", channel: "Film Label", channelId: "L2", title: "Night Theme | New Artist | Famous Composer" },
+      ])),
+    ];
+    const blind = fakeFetch(...results());
+    expect(await createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: blind.fetcher }).lookup(unknown, "e")).toEqual({ kind: "ambiguous", reason: "multiple_topic_channels" });
+    const informed = fakeFetch(...results());
+    const out = await createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: informed.fetcher }).lookup(unknown, "e", { context: ["Famous Composer", "Another Star"] });
+    expect(out.kind === "resolved" && [out.video.videoId, ...(out.alternates ?? []).map((v) => v.videoId)]).toEqual(["BBBBBBBBBBB", "DDDDDDDDDDD"]);
+    expect(corroborates({ title: "Song | New Artist", channelTitle: "Famous Composer - Topic" }, "New Artist", ["Famous Composer"])).toBe(true);
+    expect(corroborates({ title: "Song | New Artist", channelTitle: "Label" }, "New Artist", ["New Artist"])).toBe(false); // never self-corroboration
+  });
+
   it("S9.17: one batch query also harvests verified recordings for other authorized reservoir artists", async () => {
     const { fetcher } = fakeFetch(
       jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "Label", channelId: "L1" }])),
@@ -473,7 +497,7 @@ describe("per-artist Tier B cache", () => {
   });
 
   it("versions cache keys so negative entries from a stricter policy cannot suppress the credited-upload policy", () => {
-    expect(RESOLVER_POLICY_VERSION).toBe("v3-credited");
+    expect(RESOLVER_POLICY_VERSION).toBe("v4-context");
     expect(lookupCacheKey(artist.entityId)).toContain(`:${RESOLVER_POLICY_VERSION}:`);
     expect(lookupCacheKey(artist.entityId)).not.toBe(`tp:yt:artist:${artist.entityId}`);
   });

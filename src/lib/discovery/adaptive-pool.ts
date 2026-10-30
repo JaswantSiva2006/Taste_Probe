@@ -5,7 +5,7 @@ import type { RecommendationCandidate } from "@/lib/contracts";
 export const ADAPTIVE_POOL_MAX_CANDIDATES = 90;
 export const POOL_DECISIONS = ["KEEP", "LOCAL_REPLACE", "FETCH_AND_MERGE", "EXPAND", "DEGRADED_KEEP"] as const;
 export type PoolDecision = (typeof POOL_DECISIONS)[number];
-export const QUERY_FAMILIES = ["BASE", "PROFILE_REFRESH", "TAG_FOCUS", "PAGINATE", "DIVERSIFY", "VALIDATED_EXCLUSION_REFRESH"] as const;
+export const QUERY_FAMILIES = ["BASE", "PROFILE_REFRESH", "TAG_FOCUS", "PAGINATE", "DIVERSIFY", "VALIDATED_EXCLUSION_REFRESH", "WALK_NEIGHBOURHOOD", "WALK_BLEND", "AGENT_SCOUT"] as const;
 
 const PoolOriginSchema = z.object({ family: z.enum(QUERY_FAMILIES), queryHash: z.string().length(24), rank: z.number().int().positive(), requestId: z.string().min(1) });
 const PoolEntrySchema = z.object({
@@ -168,6 +168,8 @@ export function mergeAdaptiveCandidates(input: {
   plan: QueryPlan; requestId: string; round: number; at: number; qlooCalls: number;
   /** Current recording and saved references need retention without becoming preference pins. */
   protectedIds?: string[];
+  /** S9.18: taste-weighted retention (the walk's relevance); default is unweighted reciprocal-rank fusion. */
+  retentionScore?: (entry: AdaptivePoolState["entries"][number]) => number;
 }): { candidates: RecommendationCandidate[]; pool: AdaptivePoolState; addedIds: string[] } {
   const validIncoming = input.incoming.filter((candidate) =>
     candidate.entityType === input.pool.targetType &&
@@ -207,7 +209,7 @@ export function mergeAdaptiveCandidates(input: {
 
   const fused = [...entries.values()].map((entry) => ({
     entry,
-    score: entry.origins.reduce((sum, origin) => sum + 1 / (60 + origin.rank), 0),
+    score: input.retentionScore ? input.retentionScore(entry) : entry.origins.reduce((sum, origin) => sum + 1 / (60 + origin.rank), 0),
   })).sort((a, b) => b.score - a.score || a.entry.origins[0]!.rank - b.entry.origins[0]!.rank || a.entry.candidateId.localeCompare(b.entry.candidateId));
   const protectedIds = new Set([...input.pool.pinnedIds, ...input.pool.rejectedIds, ...(input.protectedIds ?? [])]);
   const retained = unique([

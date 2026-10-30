@@ -128,7 +128,15 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
   const path = resolvePath(view);
   const lead = path?.featured[0]?.rec ?? recs[0];
   const artistRec = l?.artist ? recs.find((r) => r.candidate.entityId === l.artist!.entityId) : undefined;
+  const via = l?.path?.via.map((v) => v.name) ?? [];
+  // S9.18: an artist reached by walking Qloo's graph is explained by the walk, not the starting point.
+  const walkWhy =
+    !l?.path || !l.artist ? null
+    : l.path.kind === "NEIGHBOURHOOD" ? `You responded to ${via[0]}, so TasteProbe asked Qloo for ${via[0]}’s own neighbourhood. ${l.artist.name} was there.`
+    : l.path.kind === "BLEND" ? `Qloo found ${l.artist.name} where ${listOfNames(via)} meet — artists you responded to.`
+    : `TasteProbe’s AI scout named ${l.artist.name} because you responded to ${listOfNames(via)}; Qloo identified the artist.`;
   const why =
+    walkWhy ??
     path?.featured.find((f) => f.item.recommendationEntityId === l?.artist?.entityId)?.item.explanation.text ??
     (l?.artist ? `Qloo returned ${l.artist.name} among music artists connected to “${view.seed.name}”.` : null);
 
@@ -269,7 +277,7 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
 
   return (
     <section className="sp-stage tp-listen" aria-labelledby="tp-listen-title" aria-busy={pending}>
-      <Journey seed={view.seed.name} artist={artist.name} recording={video.title} />
+      <Journey seed={view.seed.name} via={l.path ? listOfNames(l.path.via.map((v) => v.name)) : undefined} artist={artist.name} recording={video.title} />
       <div className="sp-stage__grid">
         <div className="sp-stage__main">
           <div className="sp-now" key={video.videoId}>
@@ -409,6 +417,7 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
               <details className="sp-why">
                 <summary>Why this artist?</summary>
                 <p>{why}</p>
+                {l.trail && l.trail.length ? <p className="sp-why__trail">Your taste trail: {[view.seed.name, ...l.trail.map((x) => x.name)].join(" → ")}</p> : null}
                 <p className="sp-why__note">Qloo suggested the artist; TasteProbe picked this verified recording; you decide what to keep.</p>
               </details>
             ) : null}
@@ -456,13 +465,21 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
 }
 
 /** From your starting point → Qloo's artist → the verified recording. Real names only. */
-function Journey({ seed, artist, recording }: { seed: string; artist?: string; recording: string | null }) {
+const listOfNames = (names: string[]) => (names.length <= 1 ? names[0] ?? "" : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`);
+
+function Journey({ seed, via, artist, recording }: { seed: string; via?: string; artist?: string; recording: string | null }) {
   return (
     <ol className="sp-journey" aria-label="Your listening journey">
       <li>
         <span className="sp-journey__k">From</span>
         <span className="sp-journey__v">{seed}</span>
       </li>
+      {via ? (
+        <li data-on="true" data-step="via">
+          <span className="sp-journey__k">Through</span>
+          <span className="sp-journey__v">{via}</span>
+        </li>
+      ) : null}
       <li data-on={artist ? "true" : "false"}>
         <span className="sp-journey__k">Qloo’s artist</span>
         <span className="sp-journey__v">{artist ?? "—"}</span>

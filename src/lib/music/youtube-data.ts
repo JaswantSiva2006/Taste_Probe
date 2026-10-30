@@ -36,9 +36,15 @@ export type DynamicOutcome =
 /** The verified Qloo artist being looked up (the name is the search text; the ID keys caches). */
 export type LookupArtist = { entityId: string; name: string };
 
+/**
+ * S9.18 identity context: names Qloo places around this artist (the starting point, other
+ * reservoir artists). A recording that also credits one of them is corroborated.
+ */
+export type LookupOptions = { fresh?: boolean; context?: string[] };
+
 export interface DynamicLookup {
   /** `fresh` skips a cached answer (a deliberate deeper search for an artist the user loves). */
-  lookup(artist: LookupArtist, explorationId: string, options?: { fresh?: boolean }): Promise<DynamicOutcome>;
+  lookup(artist: LookupArtist, explorationId: string, options?: LookupOptions): Promise<DynamicOutcome>;
   /** Cache-only inspection. Never crosses the network lookup/quota boundary. */
   peek?(artist: LookupArtist): Promise<DynamicOutcome | null>;
   /**
@@ -46,7 +52,7 @@ export interface DynamicLookup {
    * recordings in the same results that verifiably belong to them are kept too (positive only;
    * a harvest artist that is absent is simply omitted). Null is deferred, never negative evidence.
    */
-  lookupBatch?(artists: LookupArtist[], explorationId: string, harvest?: LookupArtist[]): Promise<Record<string, DynamicOutcome | null>>;
+  lookupBatch?(artists: LookupArtist[], explorationId: string, harvest?: LookupArtist[], context?: string[]): Promise<Record<string, DynamicOutcome | null>>;
 }
 
 const API = "https://www.googleapis.com/youtube/v3";
@@ -92,11 +98,29 @@ const CREDIT_WORDS = /^(?:(?:music|musical|director|composed|composer|compositio
 export function creditsArtist(text: string, artistName: string): boolean {
   const artist = nameKey(artistName);
   if (artist.replace(/\s/g, "").length < 4) return false;
-  // Hashtags and @mentions are tagging, not credits.
-  return text
+  return creditKeys(text).has(artist);
+}
+
+/** Every whole credit segment of a text, normalized. Hashtags and @mentions are tagging, not credits. */
+export function creditKeys(text: string): Set<string> {
+  return new Set(text
     .replace(/[#@]\S+/g, " ")
-    .split(/[|,\-–—:;()[\]{}"“”/•·+&]|\s(?:x|X|feat\.?|ft\.?|featuring|with|by|and|vs\.?)\s/)
-    .some((segment) => nameKey(segment).replace(CREDIT_WORDS, "") === artist);
+    .split(/[|,\-–—:;()[\]{}"“”/•·+&\n]|\s(?:x|X|feat\.?|ft\.?|featuring|with|by|and|vs\.?)\s/)
+    .map((segment) => nameKey(segment).replace(CREDIT_WORDS, ""))
+    .filter((key) => key.replace(/\s/g, "").length >= 4));
+}
+
+/** True when the recording also credits someone from the artist's Qloo context (or comes from their channel). */
+export function corroborates(video: CandidateVideo, artistName: string, context: string[]): boolean {
+  const self = nameKey(artistName);
+  const keys = creditKeys(`${video.title}\n${(video.description ?? "").slice(0, 3000)}`);
+  const channel = compact(video.channelTitle);
+  return context.some((name) => {
+    const key = nameKey(name);
+    if (!key || key === self || key.replace(/\s/g, "").length < 4) return false;
+    const c = key.replace(/\s/g, "");
+    return keys.has(key) || channel === c || channel === `${c}topic` || channel === `${c}vevo`;
+  });
 }
 
 export type MatchTier = "topic" | "vevo" | "artist_channel" | "credited_title" | "credited_description";
@@ -181,13 +205,13 @@ const songKey = (title: string, artistName: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-type Verified = { video: ResolvedVideo; tier: MatchTier; channelId: string; order: number };
+type Verified = { video: ResolvedVideo; tier: MatchTier; channelId: string; order: number; corroborated: boolean };
 
 /**
  * Attribute fetched videos to one artist. Each accepted video must have been returned by
  * the search with the same channel ID, be public and embeddable, and pass `matchRecording`.
  */
-function verifyFor(artist: LookupArtist, items: SearchItem[], videos: VideoItem[], at: Date): { accepted: Verified[]; ambiguous?: string } {
+function verifyFor(artist: LookupArtist, items: SearchItem[], videos: VideoItem[], at: Date, context: string[] = []): { accepted: Verified[]; ambiguous?: string } {
   const searched = new Map(items.map((i, order) => [i.id?.videoId ?? "", { channelId: i.snippet?.channelId, order }]));
   const accepted: Verified[] = [];
   for (const video of videos) {
@@ -203,15 +227,26 @@ function verifyFor(artist: LookupArtist, items: SearchItem[], videos: VideoItem[
       tier,
       channelId: hit.channelId,
       order: hit.order,
+      corroborated: context.length > 0 && corroborates({ title, channelTitle, description: video.snippet?.description }, artist.name, context),
       video: { videoId: video.id, title: title.slice(0, 300), channelTitle: channelTitle.slice(0, 200), channelKind: KIND[tier], provenance: "youtube_data_api", watchUrl: watchUrl(video.id), verifiedAt: at.toISOString(), ...(durationSeconds ? { durationSeconds } : {}) },
     });
   }
-  // Two auto-generated channels for one name means two different artists share it.
+  // Two auto-generated (or two own-name) channels for one name means two different artists
+  // share it. Then only recordings corroborated by the artist's Qloo context are kept, and
+  // a Topic channel counts only if one of its recordings is corroborated.
   const topics = new Set(accepted.filter((v) => v.tier === "topic").map((v) => v.channelId));
-  if (topics.size > 1) return { accepted: [], ambiguous: "multiple_topic_channels" };
+  const owners = new Set(accepted.filter((v) => v.tier === "artist_channel").map((v) => v.channelId));
+  let pool = accepted;
+  if (topics.size > 1 || owners.size > 1) {
+    const trustedChannels = new Set(accepted.filter((v) => v.corroborated && (v.tier === "topic" || v.tier === "artist_channel")).map((v) => v.channelId));
+    pool = accepted.filter((v) => v.corroborated || trustedChannels.has(v.channelId));
+    if (!pool.length) return { accepted: [], ambiguous: topics.size > 1 ? "multiple_topic_channels" : "multiple_artist_channels" };
+  }
   const seenSongs = new Set<string>();
-  const ordered = accepted
-    .sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier] || a.order - b.order)
+  // Within a tier, corroborated recordings come first; a corroborated credit outranks an uncorroborated own-name channel.
+  const rank = (v: Verified) => TIER_RANK[v.tier] - (v.corroborated && v.tier !== "topic" && v.tier !== "vevo" ? 1.5 : 0);
+  const ordered = pool
+    .sort((a, b) => rank(a) - rank(b) || Number(b.corroborated) - Number(a.corroborated) || a.order - b.order)
     .filter((v) => {
       const key = songKey(v.video.title, artist.name);
       if (key && seenSongs.has(key)) return false;
@@ -248,7 +283,7 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
   const at = () => opts.now?.() ?? new Date();
 
   return {
-    async lookupBatch(artists, explorationId, harvest = []) {
+    async lookupBatch(artists, explorationId, harvest = [], context = []) {
       const bounded = [...new Map(artists.map((a) => [a.entityId, a])).values()].slice(0, 6);
       const extra = [...new Map(harvest.filter((h) => !bounded.some((b) => b.entityId === h.entityId)).map((a) => [a.entityId, a])).values()].slice(0, 90);
       const outcomes: Record<string, DynamicOutcome | null> = Object.fromEntries(bounded.map((a) => [a.entityId, null]));
@@ -263,7 +298,7 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
             if (bounded.includes(artist)) outcomes[artist.entityId] = { kind: "ambiguous", reason: "duplicate_artist_name" };
             continue;
           }
-          const { accepted, ambiguous } = verifyFor(artist, items, videos, at());
+          const { accepted, ambiguous } = verifyFor(artist, items, videos, at(), context);
           if (ambiguous) { if (bounded.includes(artist)) outcomes[artist.entityId] = { kind: "ambiguous", reason: ambiguous }; continue; }
           if (accepted.length) outcomes[artist.entityId] = resolvedFrom(accepted);
         }
@@ -272,14 +307,14 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
         return Object.fromEntries(bounded.map((a) => [a.entityId, (error as { quota?: boolean }).quota ? { kind: "quota" as const } : { kind: "failed" as const, reason: "youtube_batch_failed" }]));
       }
     },
-    async lookup(artist, explorationId) {
+    async lookup(artist, explorationId, options) {
       try {
         // The shared Redis-backed quota decision is part of authorization. If it is
         // unavailable, fail closed before making any YouTube request.
         if (!(await opts.quota.take(explorationId))) return { kind: "quota" };
         const { items, videos } = await searchAndFetch(artist.name.slice(0, 200), 25);
         if (!items.length) return { kind: "none" };
-        const { accepted, ambiguous } = verifyFor(artist, items, videos, at());
+        const { accepted, ambiguous } = verifyFor(artist, items, videos, at(), options?.context ?? []);
         if (ambiguous) return { kind: "ambiguous", reason: ambiguous };
         if (!accepted.length) return { kind: "ambiguous", reason: "no_verified_match" };
         return resolvedFrom(accepted);

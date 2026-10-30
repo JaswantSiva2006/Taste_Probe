@@ -170,5 +170,9 @@ export const ListeningViewSchema = z.object({
   /** S9.15: validated preview of `video` (null: full playback only). */
   preview: PreviewSelectionSchema.nullable(),
   upNext: VerifiedSongOptionSchema.nullable().optional(),
+  /** S9.18: how the taste walk reached the current artist (null: Qloo's list for the starting point). */
+  path: z.object({ kind: z.enum(["NEIGHBOURHOOD", "BLEND", "SCOUT"]), via: z.array(z.object({ entityId: EntityId, name: z.string() })).max(3) }).nullable().optional(),
+  /** S9.18: artists whose Qloo neighbourhoods the walk has explored, in order. */
+  trail: z.array(z.object({ entityId: EntityId, name: z.string() })).max(8).optional(),
 });
 export type ListeningView = z.infer<typeof ListeningViewSchema>;

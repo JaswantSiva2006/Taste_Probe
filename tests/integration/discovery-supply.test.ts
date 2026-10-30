@@ -17,21 +17,25 @@ describe("S9.16R supply controller inside signed session transactions", () => {
   });
   it.each(["dislike10", "next15", "love5", "mixed20"])("%s: global unseen inventory sustains distinct recommendations beyond top five", async (sequence) => {
     const f = supplyFixture();
-    f.deps.provider.getRecommendations = vi.fn(async () => { throw new Error("Unexpected retrieval with adequate local supply"); });
+    // Supply retrieval is unexpected with adequate local supply; S9.18 taste-walk queries seeded by loved artists are allowed.
+    const requests: RecommendationRequest[] = [];
+    f.deps.provider.getRecommendations = vi.fn(async (request: RecommendationRequest) => { requests.push(request); throw new Error("FIXTURE: walk query unanswered"); });
     let v = await startListening(f.deps, { sessionToken: await f.sessions.create(f.state) });
-    const videos = new Set<string>(), artists = new Set<string>();
+    const videos = new Set<string>(), artists = new Set<string>(), loved = new Set<string>();
     const n = sequence === "mixed20" ? 20 : sequence === "next15" ? 15 : sequence === "love5" ? 5 : 10;
     for (let i = 0; i < n; i++) {
       const current = v.listening!.video!; expect(current).toBeTruthy();
       expect(videos.has(current.videoId)).toBe(false); videos.add(current.videoId); artists.add(current.artistId);
       const action = sequence === "love5" ? "LOVE" : sequence === "dislike10" ? "NOT_FOR_ME" : sequence === "next15" ? "NEXT" : (["LOVE", "NEXT", "NOT_FOR_ME"] as const)[i % 3]!;
+      if (action === "LOVE") loved.add(current.artistId);
       v = await act(f, v, action);
       if (action === "LOVE") { expect(v.listening!.video!.videoId).toBe(current.videoId); v = await act(f, v, "NEXT"); }
     }
     expect(videos.size).toBe(n);
     // Love may legitimately retain a liked artist; it must not force one artist per click.
     expect(artists.size).toBeGreaterThanOrEqual(sequence === "love5" ? 3 : Math.min(n, 6));
-    expect(f.deps.provider.getRecommendations).not.toHaveBeenCalled();
+    for (const r of requests) expect(r.seedEntityIds.every((id) => loved.has(id))).toBe(true);
+    if (!loved.size) expect(requests).toHaveLength(0);
     const stored = await f.sessions.load(v.sessionToken);
     expect(stored.state.session.anchorIds).toEqual(f.state.session.anchorIds);
     expect(stored.state.listening!.supply!.funnel.reservoir).toBe(30);

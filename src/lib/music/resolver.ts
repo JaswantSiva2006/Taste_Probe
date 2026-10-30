@@ -18,6 +18,8 @@ export type ResolveOptions = {
   /** Absent when no YouTube Data API key is configured. */
   dynamic?: DynamicLookup;
   registry?: (artistId: string) => ReviewedMapping | undefined;
+  /** S9.18: names around this artist in its Qloo context, for identity corroboration. */
+  context?: string[];
 };
 
 const DAY_MS = 86_400_000;
@@ -94,7 +96,7 @@ export async function resolveArtistVideo(artist: ResolveArtist, opts: ResolveOpt
   if (artist.provenance !== "qloo") return outcome("UNAVAILABLE", "synthetic_artist", opts.dynamic ? "NOT_NEEDED" : "DISABLED_NO_KEY");
   if (!opts.dynamic) return outcome("UNAVAILABLE", "no_reviewed_mapping", "DISABLED_NO_KEY");
 
-  const found = await opts.dynamic.lookup({ entityId: artist.entityId, name: artist.name }, opts.explorationId);
+  const found = await opts.dynamic.lookup({ entityId: artist.entityId, name: artist.name }, opts.explorationId, opts.context?.length ? { context: opts.context } : undefined);
   const how = "cached" in found && found.cached ? "CACHED" : "USED";
   switch (found.kind) {
     case "resolved":
