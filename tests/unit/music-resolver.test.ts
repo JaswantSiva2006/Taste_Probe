@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MusicResolutionSchema } from "@/lib/contracts";
+import { loadConfig } from "@/lib/config/env";
 import { REVIEWED_MAPPINGS, reviewedMappingFor } from "@/lib/music/mappings";
 import { resolveArtistVideo, selectMoment, type ResolveOptions } from "@/lib/music/resolver";
 import { deduplicated } from "@/lib/music/service";
@@ -442,6 +443,15 @@ describe("optional YouTube Data API tier", () => {
     responses.push(jsonRes({ items: [] }));
     await lookup.lookup(unknown, "e");
     expect(used).toEqual(["KEY-TWO"]);
+  });
+
+  it("S9.18: two keys with a blank or missing third is a normal configuration, never an error", () => {
+    const base = { NODE_ENV: "test", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: "x".repeat(40) };
+    expect(loadConfig({ ...base, YOUTUBE_API_KEY: "KEY-ONE", YOUTUBE_API_KEY_2: "KEY-TWO", YOUTUBE_API_KEY_3: "" }).music).toMatchObject({ youtubeApiKey: "KEY-ONE", youtubeApiKeys: ["KEY-ONE", "KEY-TWO"] });
+    expect(loadConfig({ ...base, YOUTUBE_API_KEY: "KEY-ONE", YOUTUBE_API_KEY_2: "KEY-TWO" }).music.youtubeApiKeys).toEqual(["KEY-ONE", "KEY-TWO"]);
+    expect(loadConfig({ ...base, YOUTUBE_API_KEY: "KEY-ONE", YOUTUBE_API_KEY_3: "   " }).music.youtubeApiKeys).toEqual(["KEY-ONE"]);
+    expect(loadConfig({ ...base, YOUTUBE_API_KEY_2: "KEY-TWO" }).music).toMatchObject({ youtubeApiKey: "KEY-TWO", youtubeApiKeys: ["KEY-TWO"] });
+    expect(loadConfig(base).music).toMatchObject({ youtubeApiKey: undefined, youtubeApiKeys: [] });
   });
 
   it("S9.18: an invalid key fails over; when every key is out, the result is RATE_LIMITED without retries", async () => {

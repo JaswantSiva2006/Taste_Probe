@@ -27,6 +27,10 @@ type ShownError = FriendlyError & { code: string; requestId?: string; retry?: ()
  *   finale:       view.status === "finished" (Discovery Path), restart → onboarding
  * Every transition is a real API response; the browser never decides availability.
  */
+
+/** Source search shows Qloo's top matches only. */
+const SEARCH_RESULTS_SHOWN = 3;
+
 export function DiscoveryApp() {
   const [mode, setMode] = useState<ProviderMode | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities>({ status: "loading" });
@@ -144,7 +148,8 @@ export function DiscoveryApp() {
       () => api.search(q, type),
       (d) => {
         setSearchedFor(q);
-        setResults(d.results);
+        // Qloo's best matches first; three is enough to recognise the one you mean.
+        setResults(d.results.slice(0, SEARCH_RESULTS_SHOWN));
       },
       search,
     );

@@ -177,7 +177,7 @@ export function Landing(p: Props) {
               {source && p.results && p.results.length > 0 ? (
                 <>
                   <p className="ah-results__prompt" id="tp-results-prompt">
-                    {p.results.length === 1 ? "Is this the one?" : `${p.results.length} matches. Which one do you mean?`}
+                    {p.results.length === 1 ? "Is this the one?" : `Top ${p.results.length} matches. Which one do you mean?`}
                   </p>
                   <ul className="ah-results__list" aria-labelledby="tp-results-prompt">
                     {p.results.map((r, i) => {
