@@ -82,6 +82,7 @@ const EnvSchema = z.object({
   YOUTUBE_SEARCHES_PER_EXPLORATION: int(2, 0, 10),
   // Exposes PENDING_REVIEW featured-moment candidates, labelled as unreviewed, for human review. Refused in production.
   MUSIC_MOMENT_REVIEW: bool(false),
+  ADAPTIVE_POOL_ENABLED: bool(false),
 });
 
 export type AppConfig = {
@@ -117,6 +118,7 @@ export type AppConfig = {
     evaluationLogging: boolean;
     agentTracing: boolean;
     expensiveOperations: boolean;
+    adaptivePool: boolean;
   };
   /** Registered-but-disabled pairs admitted for internal verification (never in production). */
   verification: { pairs: string[] };
@@ -285,6 +287,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       evaluationLogging: e.ENABLE_EVALUATION_LOGGING,
       agentTracing: e.ENABLE_AGENT_TRACING,
       expensiveOperations: e.ENABLE_EXPENSIVE_OPERATIONS,
+      adaptivePool: e.ADAPTIVE_POOL_ENABLED,
     },
     verification: { pairs: verificationPairs(e) },
     music: {

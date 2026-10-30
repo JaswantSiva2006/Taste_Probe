@@ -6,7 +6,7 @@ import { deduplicated } from "@/lib/music/service";
 import { QLOO_ENTITY_ID, YOUTUBE_VIDEO_ID, momentWithinBounds, searchUrl, watchUrl, type ReviewedMapping } from "@/lib/music/types";
 import { createQuotaGuard, createYouTubeDataLookup, parseIsoDuration, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
 import { createMemoryRateLimitStore } from "@/lib/reliability/rate-limit";
-import { NEGATIVE_TTL_MS, RESOLVED_TTL_MS, cachedLookup, createMemoryLookupCache, createRedisLookupCache } from "@/lib/music/cache";
+import { NEGATIVE_TTL_MS, RESOLVED_TTL_MS, RESOLVER_POLICY_VERSION, cachedLookup, createMemoryLookupCache, createRedisLookupCache, lookupCacheKey } from "@/lib/music/cache";
 
 /** S9.9 resolver, registry and optional Data API tier. Offline: no YouTube, Qloo or Gemini calls. */
 
@@ -205,6 +205,31 @@ describe("optional YouTube Data API tier", () => {
     expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_topic_channel_match", video: null });
   });
 
+  it("accepts an exact-name VEVO channel only when video metadata corroborates the artist", async () => {
+    const { fetcher } = fakeFetch(
+      jsonRes(search([{ id: "AAAAAAAAAAA", channel: "NewArtistVEVO" }])),
+      jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "NewArtistVEVO", title: "New Artist - Northern Lights (Official Video)" }])),
+    );
+    const dynamic = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher, now: () => NOW });
+    expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({
+      status: "RESOLVED",
+      video: { videoId: "AAAAAAAAAAA", channelKind: "vevo", channelTitle: "NewArtistVEVO" },
+    });
+  });
+
+  it("rejects lookalike VEVO channels and non-corroborating or impersonation metadata", async () => {
+    const lookalike = fakeFetch(jsonRes(search([{ id: "AAAAAAAAAAA", channel: "NewArtistVEVOOfficial" }])));
+    expect(await resolveArtistVideo(unknown, opts({ dynamic: createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: lookalike.fetcher }) }))).toMatchObject({ status: "NEEDS_REVIEW" });
+
+    for (const title of ["Another Artist - Song", "New Artist cover by Someone"] as const) {
+      const attempt = fakeFetch(
+        jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist VEVO" }])),
+        jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist VEVO", title }])),
+      );
+      expect(await resolveArtistVideo(unknown, opts({ dynamic: createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: attempt.fetcher }) }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_embeddable_public_match" });
+    }
+  });
+
   it("two Topic channels for one name are ambiguous", async () => {
     const { fetcher } = fakeFetch(
       jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic", channelId: "C1" }, { id: "BBBBBBBBBBB", channel: "New Artist - Topic", channelId: "C2" }])),
@@ -246,6 +271,18 @@ describe("optional YouTube Data API tier", () => {
     const { fetcher, calls } = fakeFetch();
     const denied = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: { take: async () => false }, fetcher });
     expect(await resolveArtistVideo(unknown, opts({ dynamic: denied }))).toMatchObject({ status: "RATE_LIMITED" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a quota-store outage fails closed before any YouTube request", async () => {
+    const { fetcher, calls } = fakeFetch();
+    const dynamic = createYouTubeDataLookup({
+      apiKey: "k",
+      timeoutMs: 1000,
+      quota: { take: async () => { throw new Error("redis unavailable"); } },
+      fetcher,
+    });
+    expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "UPSTREAM_FAILURE", dynamicLookup: "FAILED" });
     expect(calls).toHaveLength(0);
   });
 
@@ -323,6 +360,12 @@ describe("per-artist Tier B cache", () => {
     await dynamic.lookup({ ...artist, name: "Different Name" }, "e");
     expect(calls).toBe(3);
     expect(NEGATIVE_TTL_MS).toBeLessThan(RESOLVED_TTL_MS);
+  });
+
+  it("versions cache keys so S9.9 negative entries cannot suppress the VEVO policy", () => {
+    expect(RESOLVER_POLICY_VERSION).toBe("v2-topic-vevo");
+    expect(lookupCacheKey(artist.entityId)).toContain(`:${RESOLVER_POLICY_VERSION}:`);
+    expect(lookupCacheKey(artist.entityId)).not.toBe(`tp:yt:artist:${artist.entityId}`);
   });
 
   it("the Redis cache uses an expiring key and degrades to a miss on outage", async () => {

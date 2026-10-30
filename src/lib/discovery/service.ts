@@ -50,6 +50,7 @@ import {
 } from "./questions";
 import { orderOf, rankCandidates, sameOrder } from "./ranking";
 import { evaluateStop } from "./stop";
+import { initializeAdaptivePool, synchronizeAdaptivePool } from "./adaptive-pool";
 
 /** G1/G2 orchestration: wires provider, normalizer, questions, agent and session. */
 
@@ -318,7 +319,36 @@ const visibleCandidates = (state: SessionState) => {
 
 /** Records the ranked order the user will see, so the next transition can report movement. */
 function withOrder(state: SessionState, previousOrder: string[] | null): SessionState {
-  return { ...state, order: orderOf(rankCandidates(visibleCandidates(state), state.session, previousOrder)) };
+  const ordered = { ...state, order: orderOf(rankCandidates(visibleCandidates(state), state.session, previousOrder)) };
+  if (!ordered.adaptivePool) return ordered;
+  const shared = {
+    presentedIds: ordered.session.presentedEntityIds ?? [],
+    // Recommendation rejects only. A question-level dislike is not an artist rejection.
+    rejectedIds: [...dismissedIds(ordered.session)],
+    round: roundOf(ordered.session),
+    at: ordered.session.createdAt,
+  };
+  // Evaluate the incumbent slate first so a local replacement is auditable, then
+  // persist the already-verified replacement selected by the normal ranker.
+  const evaluated = synchronizeAdaptivePool(ordered.adaptivePool, {
+    ...shared,
+    displayedIds: ordered.adaptivePool.displayedIds,
+  });
+  return {
+    ...ordered,
+    adaptivePool: synchronizeAdaptivePool(evaluated, {
+      ...shared,
+      displayedIds: ordered.order.slice(0, 5),
+    }),
+  };
+}
+
+function enableAdaptivePool(deps: DiscoveryDeps, state: SessionState): SessionState {
+  if (!deps.config.features.adaptivePool || state.adaptivePool) return state;
+  return {
+    ...state,
+    adaptivePool: initializeAdaptivePool(state.candidates, state.session.targetType, state.order.slice(0, 5), roundOf(state.session), nowOf(deps)),
+  };
 }
 
 /**
@@ -564,7 +594,7 @@ async function startLive(deps: DiscoveryDeps, input: StartRequest, access: PairA
   }
 
   const outcome = await decideAndExecute(live, retrieved, ledger, { allowRetrieval: false });
-  const final = applyLedger(withOrder(applyOutcome(outcome.state, outcome.question, outcome.decision), null), ledger);
+  const final = enableAdaptivePool(deps, applyLedger(withOrder(applyOutcome(outcome.state, outcome.question, outcome.decision), null), ledger));
   const token = await sessionsOf(deps).create(final);
   const update: RecommendationUpdate = {
     mechanism: "INITIAL_RETRIEVAL",
@@ -619,7 +649,7 @@ export async function startDiscovery(deps: DiscoveryDeps, input: StartRequest): 
   });
   const initial: SessionState = { session, seed, candidates: [], order: [], finishReason: null };
   const { state, decision, question } = await runAgent(deps, initial);
-  const final = withOrder(applyOutcome(state, question, decision), null);
+  const final = enableAdaptivePool(deps, withOrder(applyOutcome(state, question, decision), null));
   const token = await sessionsOf(deps).create(final);
   return toView(deps, final, null, decision, token, 0);
 }

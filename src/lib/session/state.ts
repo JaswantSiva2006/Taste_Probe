@@ -11,6 +11,7 @@ import {
   type TasteSession,
 } from "@/lib/contracts";
 import { AppError } from "@/lib/validation/errors";
+import { AdaptivePoolStateSchema } from "@/lib/discovery/adaptive-pool";
 import { signToken, verifyToken } from "./token";
 
 /** Full session state. Authoritative copy lives in the SessionStore, never in the token. */
@@ -21,6 +22,8 @@ export const SessionStateSchema = z.object({
   /** Ranked entity order shown to the user after the last transition. */
   order: z.array(z.string()),
   finishReason: FinishReasonSchema.nullable(),
+  /** S9.10 optional foundation; absent is the exact pre-S9.10 session shape. */
+  adaptivePool: AdaptivePoolStateSchema.optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 

@@ -12,9 +12,9 @@ import type { ResolvedVideo } from "@/lib/contracts";
  * YOUTUBE_SEARCHES_PER_EXPLORATION (default 2). Every attempt is counted before it is
  * made, failures included, and nothing is retried.
  *
- * Identity rule: a result is accepted only from the artist's auto-generated
- * "<Artist> - Topic" channel (label-delivered metadata), from exactly one such channel,
- * embeddable and public. Anything else is NEEDS_REVIEW, never a guess.
+ * Identity rule: a result is accepted only from the artist's auto-generated Topic
+ * channel or an exact-name VEVO channel. VEVO also requires the video's own title to
+ * corroborate the artist. Anything ambiguous is NEEDS_REVIEW, never a guess.
  */
 
 export type DynamicOutcome =
@@ -34,7 +34,35 @@ export interface DynamicLookup {
 const API = "https://www.googleapis.com/youtube/v3";
 const DAY_MS = 86_400_000;
 
-export const normalizeName = (s: string) => s.normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+/** Canonical comparison only; the original spelling is always retained for display. */
+export const normalizeName = (s: string) =>
+  s
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+type VerifiedChannel = { kind: "topic" | "vevo"; canonical: string };
+
+function verifiedChannel(channelTitle: string, artistName: string): VerifiedChannel | null {
+  const channel = normalizeName(channelTitle).replace(/\s/g, "");
+  const artist = normalizeName(artistName).replace(/\s/g, "");
+  if (!artist) return null;
+  if (channel === `${artist}topic`) return { kind: "topic", canonical: channel };
+  if (channel === `${artist}vevo`) return { kind: "vevo", canonical: channel };
+  return null;
+}
+
+const IMPERSONATION = /\b(cover|tribute|karaoke|reaction|parody|impersonat(?:e|ion)|fan made)\b/i;
+
+/** VEVO identity is only sufficient when the video metadata independently names the artist. */
+function corroboratesVevoTitle(title: string, artistName: string): boolean {
+  if (IMPERSONATION.test(title)) return false;
+  const titleName = normalizeName(title);
+  const artist = normalizeName(artistName);
+  return titleName === artist || titleName.startsWith(`${artist} `);
+}
 
 /** ISO-8601 duration (PT#H#M#S) → seconds. */
 export function parseIsoDuration(value: string | undefined): number | undefined {
@@ -85,8 +113,10 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
 
   return {
     async lookup({ name: artistName }, explorationId) {
-      if (!(await opts.quota.take(explorationId))) return { kind: "quota" };
       try {
+        // The shared Redis-backed quota decision is part of authorization. If it is
+        // unavailable, fail closed before making any YouTube request.
+        if (!(await opts.quota.take(explorationId))) return { kind: "quota" };
         const search = await get<{ items?: SearchItem[] }>("search", {
           part: "snippet",
           type: "video",
@@ -95,35 +125,39 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
           maxResults: "5",
           q: artistName,
         });
-        const topic = `${normalizeName(artistName)} - topic`;
         const items = (search.items ?? []).filter((i) => isVideoId(i.id?.videoId));
-        const matching = items.filter((i) => normalizeName(i.snippet?.channelTitle ?? "") === topic);
+        const matching = items.flatMap((item) => {
+          const channel = verifiedChannel(item.snippet?.channelTitle ?? "", artistName);
+          return channel ? [{ item, channel }] : [];
+        });
         if (!matching.length) return items.length ? { kind: "ambiguous", reason: "no_topic_channel_match" } : { kind: "none" };
-        if (new Set(matching.map((i) => i.snippet?.channelId)).size > 1) return { kind: "ambiguous", reason: "multiple_topic_channels" };
+        if (new Set(matching.map(({ item }) => item.snippet?.channelId)).size > 1) {
+          const onlyTopic = matching.every(({ channel }) => channel.kind === "topic");
+          return { kind: "ambiguous", reason: onlyTopic ? "multiple_topic_channels" : "multiple_verified_channels" };
+        }
 
         const videos = await get<{ items?: VideoItem[] }>("videos", {
           part: "snippet,contentDetails,status",
-          id: matching.map((i) => i.id!.videoId!).join(","),
+          id: matching.map(({ item }) => item.id!.videoId!).join(","),
         });
-        const ok = (videos.items ?? []).find(
-          (x) =>
-            isVideoId(x.id) &&
-            x.status?.embeddable === true &&
-            x.status.privacyStatus === "public" &&
-            normalizeName(x.snippet?.channelTitle ?? "") === topic &&
-            (x.snippet?.title ?? "").trim().length > 0,
-        );
+        const ok = (videos.items ?? []).flatMap((video) => {
+          const channel = verifiedChannel(video.snippet?.channelTitle ?? "", artistName);
+          const title = video.snippet?.title?.trim() ?? "";
+          if (!isVideoId(video.id) || video.status?.embeddable !== true || video.status.privacyStatus !== "public" || !channel || !title) return [];
+          if (channel.kind === "vevo" && !corroboratesVevoTitle(title, artistName)) return [];
+          return [{ video, channel }];
+        })[0];
         if (!ok) return { kind: "ambiguous", reason: "no_embeddable_public_match" };
-        const durationSeconds = parseIsoDuration(ok.contentDetails?.duration);
+        const durationSeconds = parseIsoDuration(ok.video.contentDetails?.duration);
         return {
           kind: "resolved",
           video: {
-            videoId: ok.id!,
-            title: ok.snippet!.title!.slice(0, 300),
-            channelTitle: ok.snippet!.channelTitle!.slice(0, 200),
-            watchUrl: watchUrl(ok.id!),
+            videoId: ok.video.id!,
+            title: ok.video.snippet!.title!.slice(0, 300),
+            channelTitle: ok.video.snippet!.channelTitle!.slice(0, 200),
+            watchUrl: watchUrl(ok.video.id!),
             provenance: "youtube_data_api",
-            channelKind: "topic",
+            channelKind: ok.channel.kind,
             verifiedAt: (opts.now?.() ?? new Date()).toISOString(),
             ...(durationSeconds ? { durationSeconds } : {}),
           },

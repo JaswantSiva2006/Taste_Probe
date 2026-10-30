@@ -80,19 +80,21 @@ export function lookupCacheFor(config: AppConfig): LookupCache {
   return cache;
 }
 
-const keyOf = (artistId: string) => `tp:yt:artist:${artistId}`;
+/** Bump whenever the verifier admits a new identity class or changes negative semantics. */
+export const RESOLVER_POLICY_VERSION = "v2-topic-vevo";
+export const lookupCacheKey = (artistId: string) => `tp:yt:artist:${RESOLVER_POLICY_VERSION}:${artistId}`;
 
 /** Wraps a lookup with the per-artist cache (outermost: a hit never touches quota). */
 export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicLookup {
   return {
     async lookup(artist, explorationId) {
-      const hit = await cache.get(keyOf(artist.entityId));
+      const hit = await cache.get(lookupCacheKey(artist.entityId));
       if (hit && normalizeName(hit.artistName) === normalizeName(artist.name)) return { ...hit.outcome, cached: true };
       const outcome = await inner.lookup(artist, explorationId);
       if (outcome.kind === "resolved" || outcome.kind === "ambiguous" || outcome.kind === "none") {
         const plain = { ...outcome };
         delete plain.cached;
-        await cache.set(keyOf(artist.entityId), { artistName: artist.name, outcome: plain }, outcome.kind === "resolved" ? RESOLVED_TTL_MS : NEGATIVE_TTL_MS);
+        await cache.set(lookupCacheKey(artist.entityId), { artistName: artist.name, outcome: plain }, outcome.kind === "resolved" ? RESOLVED_TTL_MS : NEGATIVE_TTL_MS);
       }
       return outcome;
     },

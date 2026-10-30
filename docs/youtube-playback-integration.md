@@ -5,7 +5,7 @@
 - Specification: `.agents/skills/s9-9-youtube-playback/SKILL.md`.
 - Context: `docs/sound-passport-feasibility.md`, `docs/multi-round-discovery.md`, `docs/live-browser-verification.md`, and the vision document (local copy without the `(1)` suffix).
 
-**Out of scope:** no adaptive pool, listening feedback or Passport collection is implemented here.
+**S9.10 note:** the adaptive-pool foundation is documented separately; listening feedback and Passport collection remain out of scope.
 
 **Rule:** Qloo recommends **artists**; YouTube supplies **videos**. TasteProbe never says Qloo chose a song. Four provenances are kept separate:
 - the Qloo artist;
@@ -140,7 +140,7 @@ Each registry entry carries `verifiedAt` and `evidence: ["oembed_200","iframe_pl
 | Danny Norbury | **RESOLVED** `bQY0q6mLyng` "Speak, Memory" (Danny Norbury - Topic, 337 s) |
 | Deaf Center | **RESOLVED** `i61WLyM3pZ0` "Open Upon" (Deaf Center - Topic, 394 s) |
 | Julia Kent | NEEDS_REVIEW: her uploads are on a channel named "Julia Kent", not a Topic channel |
-| Shawn Mendes | NEEDS_REVIEW: only VEVO results |
+| Shawn Mendes | Historical S9.9 result: NEEDS_REVIEW because the old dynamic policy excluded VEVO |
 
 Both resolved videos reached PLAYING in the official player, with the reported ID and channel matching.
 
@@ -152,7 +152,7 @@ The server path (`PROBE_PART=service npm run probe:youtube`) runs `resolveMusic`
 
 Total YouTube usage for these checks: 8 `search.list` and 6 `videos.list` (8 of the 100/day search bucket).
 
-**Per-artist cache** (`src/lib/music/cache.ts`). Search results are not stable: Deaf Center returned "Open Upon" once and `U00ks17rrCs` on a later call. So Tier B outcomes are cached by **Qloo artist ID**:
+**Per-artist cache** (`src/lib/music/cache.ts`). Search results are not stable: Deaf Center returned "Open Upon" once and `U00ks17rrCs` on a later call. Tier B outcomes are cached by **policy version plus Qloo artist ID**. S9.10 uses `v2-topic-vevo`, so a negative entry written by the narrower S9.9 Topic-only policy cannot suppress a newly valid VEVO match:
 
 | Outcome | Cached for |
 |---|---|
@@ -183,12 +183,13 @@ Total YouTube usage for these checks: 8 `search.list` and 6 `videos.list` (8 of 
 
 Concurrent lookups for the same artist share one request.
 
-**Tier B identity rule.** A result is accepted only when all of these hold:
-- the video sits on exactly **one** `<Artist> - Topic` channel matching the Qloo name;
+**S9.10 Tier B identity rule.** A result is accepted only when all of these hold:
+- the video sits on exactly one canonical channel matching the Qloo name: `<Artist> - Topic` or exact-name `<Artist>VEVO` (spacing, punctuation, case, and diacritics are normalized; extra words are not accepted);
 - it was found with `type=video&videoEmbeddable=true&videoCategoryId=10`;
 - `videos.list` reports it as `embeddable` and `public`.
+- for VEVO, the video title independently starts with the normalized artist name and contains no cover, tribute, karaoke, reaction, parody, fan-made, or impersonation marker.
 
-Anything else is **NEEDS_REVIEW**. Quota exhaustion (403/429) returns **RATE_LIMITED**, and network or timeout failures return **UPSTREAM_FAILURE**. The key travels in the `x-goog-api-key` header, never in a URL. Tests use a fake fetch only.
+Topic behavior remains supported. A self-operated artist channel still requires independently reviewed evidence in the static registry; a name match alone never authorizes dynamic playback. Ambiguous identity remains **NEEDS_REVIEW**. Quota exhaustion (403/429) returns **RATE_LIMITED**, and network, timeout, or shared quota-store failures return **UPSTREAM_FAILURE**. A quota-store failure occurs before any YouTube request. The key travels in the `x-goog-api-key` header, never in a URL. Tests use a fake fetch only.
 
 **Enabling Tier B later:**
 1. Create a key in a Google Cloud project with the YouTube Data API v3 enabled. The default free quota needs no billing; do not enable billing.
