@@ -44,7 +44,7 @@ const SIX = ["movie", "book", "music_artist", "tv_show", "video_game", "podcast"
 
 describe("domain capability registry", () => {
   it("registers all 30 directed cross-domain pairs and enables only verified ones", () => {
-    expect(DOMAIN_PAIRS).toHaveLength(30);
+    expect(DOMAIN_PAIRS).toHaveLength(31);
     expect(pairStatus("movie", "book")).toBe("enabled");
     expect(DOMAIN_PAIRS.filter((p) => p.enabled).every((p) => p.evidence === "FULL_E2E_VERIFIED")).toBe(true);
     expect(DOMAIN_PAIRS.find((p) => p.source === "podcast" && p.target === "video_game")).toMatchObject({ enabled: false, evidence: "OFFLINE_MATRIX" });

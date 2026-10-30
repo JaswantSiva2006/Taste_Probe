@@ -122,6 +122,7 @@ export function normalizeTargetCandidates(
   target: { targetType: EntityType; provenance: ProviderResult<unknown>["provenance"] },
 ): { candidates: RecommendationCandidate[]; rejected: number } {
   const all = normalizeRecommendations(result, seedEntityIds, limit);
-  const candidates = all.filter((c) => c.entityType === target.targetType && c.evidence.source === target.provenance);
+  const anchors = new Set(seedEntityIds.map((id) => id.toUpperCase()));
+  const candidates = all.filter((c) => c.entityType === target.targetType && c.evidence.source === target.provenance && !anchors.has(c.entityId.toUpperCase()));
   return { candidates, rejected: all.length - candidates.length };
 }

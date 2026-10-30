@@ -310,7 +310,7 @@ export function DiscoveryApp() {
           <span className="sp-navpass__count" aria-label={`${passportItems.length} saved`}>{passportItems.length}</span>
         </button>
         <span className="tp-top__mode">
-          {mode === "live" ? "Live · Qloo + Gemini" : mode === "mock" ? "Mock mode" : capabilities.status === "error" ? "Offline" : "Connecting…"}
+          {mode === "live" ? "Live discovery" : mode === "mock" ? "Mock mode" : capabilities.status === "error" ? "Offline" : "Connecting…"}
         </span>
       </header>
 

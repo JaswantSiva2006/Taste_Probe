@@ -27,6 +27,7 @@ const optionalBool = z.enum(["true", "false"]).optional();
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_TLS_REJECT_UNAUTHORIZED: z.string().optional(),
   QLOO_MODE: z.enum(["mock", "live"]).default("mock"),
   QLOO_API_KEY: optionalString,
   QLOO_BASE_URL: optionalString,
@@ -218,6 +219,9 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
     throw new AppError("CONFIG_ERROR", 500, `Invalid environment configuration: ${names}`);
   }
   const e = parsed.data;
+  if (e.NODE_ENV === "production" && e.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    throw new AppError("CONFIG_ERROR", 500, "TLS certificate verification cannot be disabled in production");
+  }
 
   let signingSecret = e.SESSION_SIGNING_SECRET;
   let secretIsEphemeral = false;

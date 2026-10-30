@@ -148,6 +148,13 @@ const PAIR_STATUS: Partial<Record<PairKey, { enabled: boolean; evidence: Capabil
   // S9.3 live HTTP sessions (Upstash Redis, live Gemini): search → start → answer → replay 409 → finish → path.
   "music_artist->book": { enabled: true, evidence: "FULL_E2E_VERIFIED" },
   "movie->music_artist": { enabled: true, evidence: "FULL_E2E_VERIFIED" },
+  // S9.14 real typed Search + Insights probes; held from public enablement until
+  // production session/listening/browser acceptance is complete.
+  "music_artist->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
+  "tv_show->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
+  "video_game->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
+  "podcast->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
+  "book->music_artist": { enabled: false, evidence: "INCONCLUSIVE" },
   // S9.3 probe: Insights from a verified movie returned 10/10 correctly typed, tagged entities. No session yet.
   // S9.5: full live HTTP lifecycle passed (Redis, Gemini, positive answer → local rerank). Kept
   // disabled until the browser journey is verified too, the S9.5 bar for public pairs.
@@ -158,7 +165,7 @@ const PAIR_STATUS: Partial<Record<PairKey, { enabled: boolean; evidence: Capabil
 
 export const DOMAIN_PAIRS: readonly DomainPairCapability[] = Object.freeze(
   ALL_DOMAINS.flatMap((source) =>
-    ALL_DOMAINS.filter((target) => target !== source).map((target) =>
+    ALL_DOMAINS.filter((target) => target !== source || source === "music_artist").map((target) =>
       Object.freeze({ source, target, ...(PAIR_STATUS[`${source}->${target}`] ?? { enabled: false, evidence: "OFFLINE_MATRIX" as const }) }),
     ),
   ),
@@ -179,7 +186,7 @@ export function registryProblems(
   const keys = pairs.map((p) => `${p.source}->${p.target}`);
   if (new Set(keys).size !== keys.length) problems.push("duplicate pair");
   for (const p of pairs) {
-    if (p.source === p.target) problems.push(`${p.source}->${p.target}: same-domain pair`);
+    if (p.source === p.target && p.source !== "music_artist") problems.push(`${p.source}->${p.target}: same-domain pair`);
     if (!p.enabled) continue;
     for (const d of [p.source, p.target]) {
       if (!domains[d].sessionReady) problems.push(`${p.source}->${p.target}: ${d} has no session adapter`);

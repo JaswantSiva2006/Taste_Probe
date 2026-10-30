@@ -35,7 +35,7 @@ import { testConfig } from "../helpers";
  */
 
 const SIX = Object.keys(DOMAINS) as CulturalDomain[];
-const PAIRS = SIX.flatMap((source) => SIX.filter((t) => t !== source).map((target) => [source, target] as const));
+const PAIRS = SIX.flatMap((source) => SIX.filter((t) => t !== source || source === "music_artist").map((target) => [source, target] as const));
 const DISABLED = DOMAIN_PAIRS.filter((p) => !p.enabled).map((p) => pairKey(p.source, p.target));
 
 const ANCHOR_ID = (d: CulturalDomain) => `F1X0${d.length}AA-0000-4000-8000-${String(SIX.indexOf(d)).padStart(12, "0")}`;
@@ -130,7 +130,7 @@ const STORY_WORDS = /\b(stor(y|ies)|storytelling|read|books?|novels?)\b/i;
 
 describe("S9.3 offline matrix — all 30 directed pairs (engine behaviour, NOT live Qloo coverage)", () => {
   it("covers exactly the 30 registered cross-domain pairs", () => {
-    expect(PAIRS).toHaveLength(30);
+    expect(PAIRS).toHaveLength(31);
     expect(PAIRS.map(([s, t]) => pairKey(s, t)).sort()).toEqual(DOMAIN_PAIRS.map((p) => pairKey(p.source, p.target)).sort());
   });
 
