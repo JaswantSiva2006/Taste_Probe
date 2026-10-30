@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S9.8 YouTube player feasibility prototype</title>
+<style>
+  :root { --ink: #16130f; --paper: #f6f1e8; --line: #d8cfbf; --accent: #8a3b12; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--ink); background: var(--paper); }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .note { font-size: .875rem; color: #5b5246; margin: 0 0 20px; }
+  /* Visible player, never overlaid: >= 200x200 at any width, 480x270+ on desktop. */
+  .stage { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 200px; background: #000; }
+  .stage > div, .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .fallback { border: 1px solid var(--accent); padding: 16px; margin-top: 12px; }
+  .fallback[hidden] { display: none; }
+  .now { margin: 12px 0; min-height: 3em; }
+  .tracks { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 8px; }
+  .tracks button { width: 100%; text-align: left; padding: 10px 12px; border: 1px solid var(--line); background: #fff; font: inherit; cursor: pointer; }
+  .tracks button[aria-pressed="true"] { border-color: var(--ink); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .actions button { padding: 10px 14px; font: inherit; border: 1px solid var(--ink); background: var(--ink); color: #fff; cursor: pointer; }
+  .actions button.secondary { background: transparent; color: var(--ink); }
+  small { color: #5b5246; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sound Passport — playback feasibility (S9.8 prototype)</h1>
+  <p class="note">Isolated prototype, not the product. Moments below are <strong>test fixtures</strong> chosen to exercise start/end playback — they are not claimed highlights.</p>
+
+  <div class="stage"><div id="player"></div></div>
+  <div class="fallback" id="fallback" role="alert" hidden>
+    <strong id="fallback-title">This video can't be played here.</strong>
+    <p>The artist recommendation still stands. <a id="fallback-link" href="#" target="_blank" rel="noopener">Look for <span id="fallback-artist"></span> on YouTube</a>.</p>
+  </div>
+  <p class="now" id="now" aria-live="polite">Choose a track, then press Play. Nothing plays until you do.</p>
+
+  <div class="actions">
+    <button id="play" type="button">Play moment</button>
+    <button id="replay" type="button" class="secondary">Replay moment</button>
+  </div>
+
+  <ul class="tracks" id="tracks"></ul>
+  <p><small>Video data via the YouTube IFrame Player API. Titles and channels shown are reported by YouTube's player.</small></p>
+</main>
+<script>
+  // Reviewed mappings (S9.8): IDs verified via YouTube oEmbed (title + channel); Qloo IDs from the live probe.
+  const TRACKS = [
+    { artist: "Jóhann Jóhannsson", qlooId: "5AD69C26-F5C4-482F-9C8B-E3B7432F2FDC", videoId: "aXlx-YnvgKU", label: "Flight from the City", moment: { start: 30, end: 45, provenance: "prototype_fixture" } },
+    { artist: "Max Richter", qlooId: "0704ADB9-6270-4D71-B252-A42D8A4EAA47", videoId: "InyT9Gyoz_o", label: "On The Nature Of Daylight (Official Video)", moment: { start: 60, end: 75, provenance: "prototype_fixture" } },
+    { artist: "Ólafur Arnalds", qlooId: "02940707-9635-45DA-B290-243F84C6B910", videoId: "xpZgtFhDbss", label: "saman (Sunrise Session II)", moment: { start: 20, end: 35, provenance: "prototype_fixture" } },
+    // Deliberately broken mapping to exercise the error path.
+    { artist: "Broken mapping (test)", qlooId: null, videoId: "zzzzzzzzzz0", label: "Unavailable video", moment: { start: 0, end: 10, provenance: "prototype_fixture" } },
+  ];
+  const log = (window.__log = []);
+  const note = (type, data) => log.push({ t: Math.round(performance.now()), type, ...data });
+  let player = null, ready = false, current = 0;
+
+  const $ = (id) => document.getElementById(id);
+  const list = $("tracks");
+  TRACKS.forEach((track, i) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button"; b.dataset.index = String(i);
+    b.textContent = `${track.artist} — ${track.label}`;
+    b.setAttribute("aria-pressed", String(i === 0));
+    b.addEventListener("click", () => select(i));
+    li.append(b); list.append(li);
+  });
+
+  function showFallback(track, code) {
+    $("fallback-artist").textContent = track.artist;
+    $("fallback-link").href = `https://www.youtube.com/results?search_query=${encodeURIComponent(track.artist)}`;
+    $("fallback").hidden = false;
+    $("now").textContent = `Unavailable (YouTube error ${code}).`;
+  }
+
+  // Selecting cues only: no playback without a user action.
+  function select(i) {
+    current = i;
+    document.querySelectorAll(".tracks button").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.index) === i)));
+    $("fallback").hidden = true;
+    const t = TRACKS[i];
+    note("select", { videoId: t.videoId });
+    if (ready) player.cueVideoById({ videoId: t.videoId, startSeconds: t.moment.start, endSeconds: t.moment.end });
+    $("now").textContent = `${t.artist}: ${t.label} — ready. Press Play.`;
+  }
+
+  function playMoment() {
+    const t = TRACKS[current];
+    note("play_click", { videoId: t.videoId });
+    $("fallback").hidden = true;
+    player.loadVideoById({ videoId: t.videoId, startSeconds: t.moment.start, endSeconds: t.moment.end });
+  }
+  $("play").addEventListener("click", playMoment);
+  $("replay").addEventListener("click", () => { note("replay_click", {}); playMoment(); });
+
+  window.onYouTubeIframeAPIReady = () => {
+    const t = TRACKS[0];
+    player = new YT.Player("player", {
+      videoId: t.videoId,
+      host: "https://www.youtube.com",
+      playerVars: { start: t.moment.start, end: t.moment.end, controls: 1, playsinline: 1, rel: 0, origin: location.origin },
+      events: {
+        onReady: () => { ready = true; note("ready", {}); },
+        onStateChange: (e) => {
+          const d = player.getVideoData ? player.getVideoData() : {};
+          note("state", { state: e.data, videoId: d.video_id, at: Math.round(player.getCurrentTime() * 10) / 10 });
+          if (e.data === YT.PlayerState.PLAYING) $("now").textContent = `Playing: ${d.title} — ${d.author}`;
+          if (e.data === YT.PlayerState.ENDED) $("now").textContent = `Moment finished. Replay, or choose another track.`;
+        },
+        onError: (e) => {
+          note("error", { code: e.data, videoId: TRACKS[current].videoId });
+          player.stopVideo(); // never leave a half-loaded or previous video running behind the fallback
+          showFallback(TRACKS[current], e.data);
+        },
+      },
+    });
+  };
+  window.__probe = () => player && ready ? {
+    state: player.getPlayerState(), time: player.getCurrentTime(), muted: player.isMuted(), volume: player.getVolume(),
+    video: player.getVideoData(), iframes: document.querySelectorAll("iframe").length,
+    box: (() => { const r = document.querySelector("#player").getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; })(),
+  } : null;
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
