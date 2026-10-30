@@ -49,6 +49,8 @@ S9.11 may add execution behind a separately controlled feature only by:
 
 S9.11 must first verify whether Qloo pagination is supported. Until that proof exists, a `PAGINATE` plan must remain non-executable. It must not broaden source/target capabilities, invent IDs/tags, place mutable state in the token, or couple YouTube resolution to candidate retrieval.
 
+S9.11 implemented this contract in `docs/adaptive-qloo-retrieval.md`. Pagination remains unverified and disabled.
+
 ## Verification
 
 Offline tests cover feature-off compatibility, signed-session persistence, the 90-entry bound and size, deterministic decisions, stable no-churn selection, pin protection, rejection suppression, tag-dislike separation, validated/deduplicated plans, and round 1–3 state retention. Ordinary tests make zero Qloo, Gemini, or YouTube calls.

@@ -33,7 +33,9 @@ import {
   decideAndExecute,
   newLedger,
   retrieve,
+  retrieveAdaptive,
   traceOf,
+  type AdaptiveRetrievalResult,
   type LiveDeps,
   type LiveLedger,
   type LiveOutcome,
@@ -621,9 +623,11 @@ function liveExtras(deps: DiscoveryDeps, ledger: LiveLedger, outcome: LiveOutcom
 /** Preference IDs newly confirmed by an answer (positive ones may justify reretrieval). */
 function preferenceDelta(before: SessionState["session"], after: SessionState["session"]) {
   const added = (a: string[], b: string[]) => b.filter((id) => !a.includes(id));
-  const positive = [...added(before.positiveTagIds, after.positiveTagIds), ...added(before.positiveEntityIds, after.positiveEntityIds)];
+  const positiveTagIds = added(before.positiveTagIds, after.positiveTagIds);
+  const positiveEntityIds = added(before.positiveEntityIds, after.positiveEntityIds);
+  const positive = [...positiveTagIds, ...positiveEntityIds];
   const negative = [...added(before.rejectedTagIds, after.rejectedTagIds), ...added(before.rejectedEntityIds, after.rejectedEntityIds)];
-  return { positive, all: [...positive, ...negative] };
+  return { positive, positiveTagIds, positiveEntityIds, all: [...positive, ...negative] };
 }
 
 const nowOf = (deps: DiscoveryDeps) => (deps.now ?? Date.now)();
@@ -726,10 +730,20 @@ async function answerLive(
   const live = liveDepsOf(deps, ledger);
   let outcome: LiveOutcome;
   let next: SessionState;
-  const updated: SessionState = { ...state, session: { ...applyAnswer(state.session, answer), currentQuestionId: undefined } };
+  let updated: SessionState = { ...state, session: { ...applyAnswer(state.session, answer), currentQuestionId: undefined } };
   const delta = preferenceDelta(state.session, updated.session);
+  let adaptive: AdaptiveRetrievalResult | null = null;
   try {
-    outcome = await decideAndExecute(live, updated, ledger, { allowRetrieval: delta.positive.length > 0 });
+    if (deps.config.features.adaptivePool && updated.adaptivePool) {
+      adaptive = await retrieveAdaptive(live, updated, ledger, {
+        positiveTagIds: delta.positiveTagIds,
+        positiveEntityIds: delta.positiveEntityIds,
+      });
+      updated = adaptive.state;
+    }
+    // With ACPC enabled, the deterministic controller owns the single retrieval
+    // opportunity; Gemini cannot spend a second request for the same action.
+    outcome = await decideAndExecute(live, updated, ledger, { allowRetrieval: !deps.config.features.adaptivePool && delta.positive.length > 0 });
     next = applyLedger(withOrder(applyOutcome(outcome.state, outcome.question, outcome.decision), state.order), ledger);
   } catch (error) {
     // Nothing applied; usage already consumed stays charged.
@@ -740,6 +754,14 @@ async function answerLive(
 
   const previousTopIds = state.order.slice(0, TOP_K);
   const updatedTopIds = topIds(next, state.order);
+  const previousSet = new Set(previousTopIds);
+  const updatedSet = new Set(updatedTopIds);
+  const localIdentityChange = previousTopIds.some((id) => !updatedSet.has(id)) || updatedTopIds.some((id) => !previousSet.has(id));
+  const poolDecision = adaptive
+    ? adaptive.outcome === "merged" ? "FETCH_AND_MERGE"
+      : adaptive.outcome === "failed" || adaptive.outcome === "budget_exhausted" || adaptive.outcome === "duplicate" ? "DEGRADED_KEEP"
+        : localIdentityChange ? "LOCAL_REPLACE" : adaptive.decision
+    : null;
   const update: RecommendationUpdate = {
     mechanism: ledger.retrieved ? "QLOO_RERETRIEVAL" : sameOrder(state.order, next.order) ? "UNCHANGED" : "LOCAL_RERANK",
     qlooRequested: ledger.retrieved,
@@ -747,6 +769,21 @@ async function answerLive(
     previousTopIds,
     updatedTopIds,
     preferenceIds: delta.all,
+    ...(adaptive && poolDecision ? {
+      poolTransition: {
+        decision: poolDecision,
+        reasonCodes: adaptive.reasons,
+        previousDisplayedIds: previousTopIds,
+        currentDisplayedIds: updatedTopIds,
+        newReservoirIds: adaptive.addedIds,
+        newlyDisplayedIds: updatedTopIds.filter((id) => !previousSet.has(id)),
+        removedDisplayedIds: previousTopIds.filter((id) => !updatedSet.has(id)),
+        qlooCallsMade: adaptive.calls,
+        queryFamily: adaptive.plan?.family ?? null,
+        retrievalOutcome: adaptive.outcome,
+        sessionRevision: lease.revision + 1,
+      },
+    } : {}),
   };
   logTurn(deps, "answer", ledger, {
     revision: lease.revision + 1,

@@ -13,6 +13,7 @@ import { normalizeTargetCandidates } from "./normalize";
 import { optimizeQuestions } from "./question-optimizer";
 import { availableQuestions, buildQuestionCandidates } from "./questions";
 import { rankCandidates } from "./ranking";
+import { mergeAdaptiveCandidates, planAdaptiveRetrieval, recordAdaptiveAttempt, type QueryPlan } from "./adaptive-pool";
 
 /**
  * S7 live turn: S5 question shortlist -> S6 bounded agent -> application-executed
@@ -169,6 +170,88 @@ export async function retrieve(
   ledger.normalizationRejected += rejected;
   if (!candidates.length) return null;
   return { ...state, candidates };
+}
+
+export type AdaptiveRetrievalResult = {
+  state: SessionState;
+  decision: "KEEP" | "LOCAL_REPLACE" | "FETCH_AND_MERGE" | "EXPAND" | "DEGRADED_KEEP";
+  reasons: string[];
+  plan: QueryPlan | null;
+  addedIds: string[];
+  calls: number;
+  outcome: "not_requested" | "merged" | "empty" | "failed" | "duplicate" | "budget_exhausted";
+};
+
+/** S9.11 deterministic, at-most-one-request adaptive retrieval. */
+export async function retrieveAdaptive(
+  deps: LiveDeps,
+  state: SessionState,
+  ledger: LiveLedger,
+  delta: { positiveTagIds: string[]; positiveEntityIds: string[] },
+): Promise<AdaptiveRetrievalResult> {
+  if (!state.adaptivePool) return { state, decision: "KEEP", reasons: ["adaptive_pool_absent"], plan: null, addedIds: [], calls: 0, outcome: "not_requested" };
+  const planned = planAdaptiveRetrieval({
+    pool: state.adaptivePool, candidates: state.candidates, anchorIds: state.session.anchorIds,
+    targetType: state.session.targetType, newPositiveEntityIds: delta.positiveEntityIds,
+    newPositiveTagIds: delta.positiveTagIds, take: deps.config.limits.maxRecommendationCandidates,
+    includeExplainability: deps.config.mode === "live",
+  });
+  if (!planned.plan) {
+    const duplicate = planned.reasons.includes("query_already_attempted");
+    return {
+      state: { ...state, adaptivePool: recordAdaptiveAttempt(state.adaptivePool, {
+        decision: planned.decision, reasons: planned.reasons, round: state.session.round ?? 1, at: deps.now(), qlooCalls: 0,
+        outcome: duplicate ? "duplicate" : "not_requested",
+      }) },
+      ...planned, addedIds: [], calls: 0, outcome: duplicate ? "duplicate" : "not_requested",
+    };
+  }
+  if (qlooRemaining(deps, state, ledger) < 1) {
+    return {
+      state: { ...state, adaptivePool: recordAdaptiveAttempt(state.adaptivePool, {
+        decision: "DEGRADED_KEEP", reasons: ["qloo_budget_exhausted"], round: state.session.round ?? 1, at: deps.now(),
+        plan: planned.plan, qlooCalls: 0, outcome: "budget_exhausted",
+      }) },
+      decision: "DEGRADED_KEEP", reasons: ["qloo_budget_exhausted"], plan: planned.plan,
+      addedIds: [], calls: 0, outcome: "budget_exhausted",
+    };
+  }
+  try {
+    const result = await deps.provider.getRecommendations({
+      seedEntityIds: planned.plan.seedEntityIds, targetType: state.session.targetType,
+      take: planned.plan.take, positiveEntityIds: planned.plan.positiveEntityIds,
+      positiveTagIds: planned.plan.positiveTagIds, includeExplainability: planned.plan.includeExplainability,
+      maxAttempts: 1,
+    });
+    const calls = Math.max(1, result.requestCount);
+    ledger.qlooBudgetCalls += calls;
+    ledger.correlationIds.push(result.requestId);
+    ledger.retrieved = true;
+    const normalized = normalizeTargetCandidates(result, state.session.anchorIds, planned.plan.take, {
+      targetType: state.session.targetType, provenance: deps.config.mode === "live" ? "qloo" : "mock",
+    });
+    ledger.normalizationRejected += normalized.rejected;
+    const merged = mergeAdaptiveCandidates({
+      current: state.candidates, incoming: normalized.candidates, pool: state.adaptivePool,
+      plan: planned.plan, requestId: result.requestId, round: state.session.round ?? 1, at: deps.now(), qlooCalls: calls,
+    });
+    return {
+      state: { ...state, candidates: merged.candidates, adaptivePool: merged.pool },
+      decision: merged.addedIds.length ? "FETCH_AND_MERGE" : "DEGRADED_KEEP", reasons: [merged.addedIds.length ? "new_verified_candidates_merged" : "no_new_verified_candidates"],
+      plan: planned.plan, addedIds: merged.addedIds, calls, outcome: merged.addedIds.length ? "merged" : "empty",
+    };
+  } catch (error) {
+    ledger.qlooBudgetCalls += 1;
+    ledger.degraded = error instanceof AppError ? `qloo_${error.code.toLowerCase()}` : "qloo_error";
+    return {
+      state: { ...state, adaptivePool: recordAdaptiveAttempt(state.adaptivePool, {
+        decision: "DEGRADED_KEEP", reasons: ["adaptive_retrieval_failed"], round: state.session.round ?? 1, at: deps.now(),
+        plan: planned.plan, qlooCalls: 1, outcome: "failed",
+      }) },
+      decision: "DEGRADED_KEEP", reasons: ["adaptive_retrieval_failed"], plan: planned.plan,
+      addedIds: [], calls: 1, outcome: "failed",
+    };
+  }
 }
 
 /** S5: eligible, unasked, scored questions for the current authoritative state. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RecommendationCandidate } from "@/lib/contracts";
-import { ADAPTIVE_POOL_MAX_CANDIDATES, AdaptivePoolStateSchema, createQueryPlan, evaluatePool, initializeAdaptivePool, selectLocalReplacements, synchronizeAdaptivePool } from "@/lib/discovery/adaptive-pool";
+import { ADAPTIVE_POOL_MAX_CANDIDATES, AdaptivePoolStateSchema, createQueryPlan, evaluatePool, initializeAdaptivePool, mergeAdaptiveCandidates, planAdaptiveRetrieval, selectLocalReplacements, synchronizeAdaptivePool } from "@/lib/discovery/adaptive-pool";
 import { loadConfig } from "@/lib/config/env";
 import { startDiscovery } from "@/lib/discovery/service";
 import { createSessionService } from "@/lib/session/service";
@@ -71,6 +71,44 @@ describe("adaptive candidate-pool foundation", () => {
     expect(a.queryHash).toBe(b.queryHash);
     expect(() => createQueryPlan({ ...input, positiveTagIds: ["invented"] })).toThrow("query_plan_unknown_tag");
     expect(() => createQueryPlan({ ...input, family: "PAGINATE", cursor: undefined })).toThrow("query_plan_missing_cursor");
+  });
+
+  it("canonicalizes order-insensitive query identity and distinguishes different profiles", () => {
+    const knownEntityIds = new Set(["seed:1", "candidate:1", "candidate:2"]); const knownTagIds = new Set(["tag:1", "tag:2"]);
+    const base = { family: "PROFILE_REFRESH" as const, targetType: "music_artist", seedEntityIds: ["seed:1"], positiveTagIds: ["tag:2", "tag:1"], positiveEntityIds: ["candidate:2", "candidate:1"], excludedCandidateIds: [], knownEntityIds, knownTagIds, executable: true };
+    const a = createQueryPlan(base);
+    const reordered = createQueryPlan({ ...base, positiveTagIds: [...base.positiveTagIds].reverse(), positiveEntityIds: [...base.positiveEntityIds].reverse() });
+    const different = createQueryPlan({ ...base, positiveEntityIds: ["candidate:1"] });
+    expect(a.queryHash).toBe(reordered.queryHash);
+    expect(a.queryHash).not.toBe(different.queryHash);
+    expect(a.endpoint).toBe("/v2/insights");
+  });
+
+  it("merges rather than replaces, deduplicates IDs, preserves metadata/origins and enforces target type", () => {
+    const current = Array.from({ length: 6 }, (_, i) => candidate(i));
+    const pool = initializeAdaptivePool(current, "music_artist", current.slice(0, 5).map((item) => item.entityId), 1, 1);
+    const plan = createQueryPlan({ family: "TAG_FOCUS", targetType: "music_artist", seedEntityIds: ["seed:1"], positiveTagIds: ["tag:1"], knownEntityIds: new Set(["seed:1", ...current.map((item) => item.entityId)]), knownTagIds: new Set(current.flatMap((item) => item.tags.map((tag) => tag.id))), executable: true });
+    const duplicateWithMetadata = { ...candidate(1), description: undefined, imageUrl: "https://images.example/1.jpg", tags: [{ id: "tag:new", name: "New", type: "genre" }] };
+    const incoming = [duplicateWithMetadata, candidate(20), candidate(20), { ...candidate(21), entityType: "book" }];
+    const merged = mergeAdaptiveCandidates({ current, incoming, pool, plan, requestId: "request-2", round: 1, at: 2, qlooCalls: 1 });
+    expect(merged.addedIds).toEqual(["candidate:20"]);
+    expect(merged.candidates.map((item) => item.entityId)).toEqual(expect.arrayContaining(current.map((item) => item.entityId)));
+    expect(merged.candidates).toHaveLength(7);
+    const retained = merged.candidates.find((item) => item.entityId === "candidate:1")!;
+    expect(retained.description).toBe("Verified description 1");
+    expect(retained.imageUrl).toBe("https://images.example/1.jpg");
+    expect(retained.tags.map((tag) => tag.id)).toContain("tag:new");
+    expect(merged.pool.entries.find((entry) => entry.candidateId === "candidate:1")?.origins).toHaveLength(2);
+    expect(merged.candidates.some((item) => item.entityType === "book")).toBe(false);
+  });
+
+  it("suppresses a previously attempted adaptive query", () => {
+    const candidates = Array.from({ length: 6 }, (_, i) => candidate(i));
+    const pool = initializeAdaptivePool(candidates, "music_artist", candidates.slice(0, 5).map((item) => item.entityId), 1, 1);
+    const first = planAdaptiveRetrieval({ pool, candidates, anchorIds: ["seed:1"], targetType: "music_artist", newPositiveEntityIds: [], newPositiveTagIds: ["tag:1"], take: 30, includeExplainability: true });
+    expect(first.plan).not.toBeNull();
+    const attempted = AdaptivePoolStateSchema.parse({ ...pool, attemptedQueryHashes: [...pool.attemptedQueryHashes, first.plan!.queryHash] });
+    expect(planAdaptiveRetrieval({ pool: attempted, candidates, anchorIds: ["seed:1"], targetType: "music_artist", newPositiveEntityIds: [], newPositiveTagIds: ["tag:1"], take: 30, includeExplainability: true })).toMatchObject({ decision: "DEGRADED_KEEP", plan: null, reasons: ["query_already_attempted"] });
   });
 
   it("retains round 1-3 history while bounding transition records", () => {

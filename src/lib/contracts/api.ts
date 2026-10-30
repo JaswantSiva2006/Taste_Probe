@@ -179,6 +179,17 @@ export const RecommendationUpdateSchema = z.object({
   updatedTopIds: z.array(z.string()),
   /** Confirmed preference IDs that drove the update. */
   preferenceIds: z.array(z.string()),
+  /** S9.11 server-confirmed adaptive-pool transition (absent while the feature is off). */
+  poolTransition: z.object({
+    decision: z.enum(["KEEP", "LOCAL_REPLACE", "FETCH_AND_MERGE", "EXPAND", "DEGRADED_KEEP"]),
+    reasonCodes: z.array(z.string()),
+    previousDisplayedIds: z.array(z.string()), currentDisplayedIds: z.array(z.string()),
+    newReservoirIds: z.array(z.string()), newlyDisplayedIds: z.array(z.string()), removedDisplayedIds: z.array(z.string()),
+    qlooCallsMade: z.number().int().nonnegative(),
+    queryFamily: z.enum(["BASE", "PROFILE_REFRESH", "TAG_FOCUS", "PAGINATE", "DIVERSIFY"]).nullable(),
+    retrievalOutcome: z.enum(["not_requested", "merged", "empty", "failed", "duplicate", "budget_exhausted"]),
+    sessionRevision: z.number().int().nonnegative(),
+  }).optional(),
 });
 export type RecommendationUpdate = z.infer<typeof RecommendationUpdateSchema>;
 

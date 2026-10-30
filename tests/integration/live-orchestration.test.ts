@@ -57,7 +57,7 @@ const SF_BOOST = [
   book("4B74CED1-0000-0000-0000-000000000002", "Norse Mythology", 0.7, [FANTASY]),
 ];
 
-type QlooOpts = { failInsights?: "always" | "after_first"; empty?: boolean; books?: RawInsightEntity[]; failStart?: boolean };
+type QlooOpts = { failInsights?: "always" | "after_first"; empty?: boolean; books?: RawInsightEntity[]; profile?: RawInsightEntity[]; failStart?: boolean };
 
 function fakeQloo(opts: QlooOpts = {}) {
   const insights: RecommendationRequest[] = [];
@@ -79,7 +79,9 @@ function fakeQloo(opts: QlooOpts = {}) {
         throw new AppError("QLOO_TIMEOUT", 504, "Qloo request timed out");
       }
       if (opts.empty && insights.length > 1) return qloo({ success: true, results: { entities: [] } });
-      const entities = req.positiveTagIds?.includes(SF.id) ? SF_BOOST : (opts.books ?? BASE);
+      const entities = req.positiveTagIds?.includes(SF.id)
+        ? SF_BOOST
+        : req.positiveEntityIds?.length ? (opts.profile ?? SF_BOOST) : (opts.books ?? BASE);
       return qloo({ success: true, results: { entities: structuredClone(entities) } });
     },
   };
@@ -459,6 +461,85 @@ describe("answer loop: preferences, reretrieval, reranking", () => {
     const v1 = await answer(env.deps, v0, "like");
     expect(v1.degraded).toEqual({ reason: "qloo_empty_result" });
     expect(ids(v1).sort()).toEqual(ids(v0).sort());
+  });
+});
+
+describe("S9.11 adaptive candidate universe", () => {
+  const adaptive = { ADAPTIVE_POOL_ENABLED: "true" };
+
+  it("executes TAG_FOCUS deterministically, merges new IDs, refreshes questions and reports the real transition", async () => {
+    const env = liveEnv({ env: adaptive, gemini: [() => fc("ask_question", { questionId: `tag:${SF.id}`, reasonCode: "informative_question" }), askTop] });
+    const v0 = await startDiscovery(env.deps, START);
+    const old = new Set(ids(v0));
+    const v1 = await answer(env.deps, v0, "like");
+    expect(env.qloo.insights).toHaveLength(2);
+    expect(env.qloo.insights[1]).toMatchObject({ positiveTagIds: [SF.id], positiveEntityIds: [], maxAttempts: 1 });
+    expect(v1.recommendationUpdate?.poolTransition).toMatchObject({
+      decision: "FETCH_AND_MERGE", queryFamily: "TAG_FOCUS", retrievalOutcome: "merged", qlooCallsMade: 1, sessionRevision: 1,
+    });
+    expect(v1.recommendationUpdate!.poolTransition!.newReservoirIds).toContain("4B74CED1-0000-0000-0000-000000000007");
+    expect(v1.recommendationUpdate!.poolTransition!.newlyDisplayedIds).toContain("4B74CED1-0000-0000-0000-000000000007");
+    expect(ids(v1).some((id) => old.has(id))).toBe(true);
+    expect(v1.preferences.positiveTagIds).toEqual([SF.id]);
+    expect(v1.currentQuestion).not.toBeNull();
+    expectGrounded(v1);
+    await expect(answer(env.deps, v0, "like")).rejects.toMatchObject({ code: "SESSION_REVISION_CONFLICT" });
+    expect(env.qloo.insights).toHaveLength(2);
+  });
+
+  it("chooses KEEP with zero new Qloo calls when a confirmed tag already has strong local coverage", async () => {
+    const healthy = BASE.map((item, index) => ({
+      ...item,
+      tags: index < 5 ? [...(item.tags ?? []).filter((tag) => tag.id !== SF.id), SF] : (item.tags ?? []).filter((tag) => tag.id !== SF.id),
+    }));
+    const env = liveEnv({ qloo: { books: healthy }, env: adaptive, gemini: [() => fc("ask_question", { questionId: `tag:${SF.id}`, reasonCode: "informative_question" }), askTop] });
+    const v0 = await startDiscovery(env.deps, START);
+    const v1 = await answer(env.deps, v0, "like");
+    expect(env.qloo.insights).toHaveLength(1);
+    expect(v1.recommendationUpdate?.poolTransition).toMatchObject({ decision: "KEEP", retrievalOutcome: "not_requested", qlooCallsMade: 0 });
+    expect(v1.recommendationUpdate?.poolTransition?.newReservoirIds).toEqual([]);
+  });
+
+  it("executes PROFILE_REFRESH only from an explicitly preferred verified entity", async () => {
+    const untagged = BASE.map((item) => ({ ...item, tags: [] }));
+    const env = liveEnv({ qloo: { books: untagged }, env: adaptive, gemini: [askTop, askTop] });
+    const v0 = await startDiscovery(env.deps, START);
+    expect(v0.currentQuestion?.questionId).toMatch(/^entity:/);
+    const affirmed = v0.currentQuestion!.targetIds[0]!;
+    const v1 = await answer(env.deps, v0, "prefer_a");
+    expect(env.qloo.insights[1]).toMatchObject({ positiveEntityIds: [affirmed], positiveTagIds: [], maxAttempts: 1 });
+    expect(v1.recommendationUpdate?.poolTransition).toMatchObject({ decision: "FETCH_AND_MERGE", queryFamily: "PROFILE_REFRESH" });
+    expect(v1.preferences.positiveEntityIds).toEqual([affirmed]);
+  });
+
+  it("keeps the accepted preference and verified pool when adaptive Qloo fails", async () => {
+    const env = liveEnv({ qloo: { failInsights: "after_first" }, env: adaptive, gemini: [() => fc("ask_question", { questionId: `tag:${SF.id}`, reasonCode: "informative_question" }), askTop] });
+    const v0 = await startDiscovery(env.deps, START);
+    const before = ids(v0);
+    const v1 = await answer(env.deps, v0, "like");
+    expect(v1.preferences.positiveTagIds).toEqual([SF.id]);
+    expect(new Set(ids(v1))).toEqual(new Set(before));
+    expect(v1.recommendationUpdate?.poolTransition).toMatchObject({ decision: "DEGRADED_KEEP", retrievalOutcome: "failed", qlooCallsMade: 1 });
+    expect(v1.degraded?.reason).toBe("qloo_qloo_timeout");
+  });
+
+  it("spends nothing when the cumulative Qloo budget is exhausted", async () => {
+    const env = liveEnv({ env: { ...adaptive, MAX_QLOO_CALLS_PER_SESSION: "1" }, gemini: [() => fc("ask_question", { questionId: `tag:${SF.id}`, reasonCode: "informative_question" }), askTop] });
+    const v0 = await startDiscovery(env.deps, START);
+    const v1 = await answer(env.deps, v0, "like");
+    expect(env.qloo.insights).toHaveLength(1);
+    expect(v1.recommendationUpdate?.poolTransition).toMatchObject({ decision: "DEGRADED_KEEP", retrievalOutcome: "budget_exhausted", qlooCallsMade: 0 });
+    expect(v1.usage.qlooCallCount).toBe(1);
+  });
+
+  it("concurrent duplicate answers produce one adaptive request and one authoritative commit", async () => {
+    const env = liveEnv({ env: adaptive, gemini: [() => fc("ask_question", { questionId: `tag:${SF.id}`, reasonCode: "informative_question" }), askTop] });
+    const v0 = await startDiscovery(env.deps, START);
+    env.store.arm(2);
+    const results = await Promise.allSettled([answer(env.deps, v0, "like"), answer(env.deps, v0, "like")]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.map(codeOf)).toContain("SESSION_REVISION_CONFLICT");
+    expect(env.qloo.insights).toHaveLength(2);
   });
 });
 
