@@ -121,7 +121,7 @@ describe("configuration", () => {
     expect(config.qloo.apiKey).toBeUndefined();
     expect(config.limits.maxQuestions).toBe(3);
     expect(config.limits.finalRecommendationCount).toBe(5);
-    expect(config.limits.maxRecommendationCandidates).toBe(30);
+    expect(config.limits.maxRecommendationCandidates).toBe(50); // S9.16R verified single-request breadth
     expect(config.features.questionGenerationMode).toBe("deterministic");
   });
 

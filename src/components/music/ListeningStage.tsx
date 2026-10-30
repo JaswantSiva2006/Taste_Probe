@@ -43,6 +43,7 @@ type Props = {
   onListen: (artistId?: string, videoId?: string) => void;
   onAction: (action: ListeningAction, intent?: ArtistIntent) => void;
   onOpenPassport: () => void;
+  onStartOver?: () => void;
 };
 
 const SELECTION_COPY: Record<string, string> = {
@@ -76,7 +77,7 @@ function vinylState(phase: PlayerPhase | null, previewEnded = false): VinylState
   return "idle";
 }
 
-export function ListeningStage({ view, busy, pending, passportCount, onListen, onAction, onOpenPassport }: Props) {
+export function ListeningStage({ view, busy, pending, passportCount, onListen, onAction, onOpenPassport, onStartOver }: Props) {
   const l = view.listening;
   const player = useRef<PlayerHandle>(null);
   const [playback, setPlayback] = useState<PlaybackState | null>(null);
@@ -209,11 +210,13 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
           <VinylDisc state="failed" seed={l.artist?.entityId ?? "none"} artist={l.artist?.name ?? "—"} size="sm" tonearm={false} />
           <div>
             <h2 className="sp-empty__title" id="tp-listen-title" tabIndex={-1}>
-              {l.notice === "verified_inventory_exhausted" ? "You’ve heard the available verified recordings" : <>We couldn’t verify a recording for {l.artist?.name ?? "this artist"}</>}
+              {l.notice === "verified_inventory_exhausted" ? "No new verified recordings are ready" : <>We couldn’t verify a recording for {l.artist?.name ?? "this artist"}</>}
             </h2>
             <p>{l.notice === "verified_inventory_exhausted" ? "There are no new verified recordings left in this exploration. Your saved Passport stays on this device." : "This doesn’t mean their music is unavailable. We couldn’t confirm a playable YouTube recording belongs to this artist. Try another artist here, or look for their music on YouTube."}</p>
             <div className="sp-intro__actions">
               {l.notice === "verified_inventory_exhausted" ? <button type="button" className="sp-btn sp-btn--quiet" onClick={onOpenPassport}>Open your Sound Passport</button> : null}
+              {l.notice === "verified_inventory_exhausted" && onStartOver ? <button type="button" className="sp-btn sp-btn--quiet" onClick={onStartOver}>Try a different starting point</button> : null}
+              {l.notice === "verified_inventory_exhausted" && l.history.length ? <button type="button" className="sp-btn sp-btn--quiet" disabled={busy} onClick={() => { const previous = l.history.at(-1)!; onListen(previous.artistId, previous.videoId); }}>Replay an earlier recording</button> : null}
               <button type="button" className="sp-btn sp-btn--primary" disabled={busy} onClick={() => onListen()}>
                 <DifferentArtist size={18} /> Try the next artist
               </button>

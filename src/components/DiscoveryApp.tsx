@@ -362,6 +362,7 @@ export function DiscoveryApp() {
         ) : null}
         {screen === "app" && phase === "finale" && view && view.targetType === "music_artist" && view.exploration?.status !== "accepted" ? (
           <ListeningStage
+            onStartOver={() => restart()}
             view={view}
             busy={busy}
             pending={pending === "listen"}

@@ -182,6 +182,38 @@ function fakeFetch(...responses: Response[]) {
 describe("optional YouTube Data API tier", () => {
   const unknown = { entityId: "11111111-1111-4111-8111-111111111111", name: "New Artist", provenance: "qloo" as const };
 
+  it("batch lookup verifies multiple exact artists with one quota reservation and rejects unsearched or label videos", async () => {
+    const artists = [unknown, { entityId: "22222222-2222-4222-8222-222222222222", name: "Second Artist" }];
+    const { fetcher, calls } = fakeFetch(
+      jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "SecondArtistVEVO" }, { id: "CCCCCCCCCCC", channel: "Unreviewed Label" }])),
+      jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "SecondArtistVEVO", title: "Second Artist - Track" }, { id: "CCCCCCCCCCC", channel: "Unreviewed Label" }, { id: "DDDDDDDDDDD", channel: "New Artist - Topic" }])),
+    );
+    const quota = { take: vi.fn(async () => true) };
+    const resolver = createYouTubeDataLookup({ apiKey: "FIXTURE", timeoutMs: 1000, quota, fetcher });
+    const out = await resolver.lookupBatch!(artists, "fixture");
+    expect(out[artists[0]!.entityId]).toMatchObject({ kind: "resolved", video: { videoId: "AAAAAAAAAAA" } });
+    expect(out[artists[1]!.entityId]).toMatchObject({ kind: "resolved", video: { videoId: "BBBBBBBBBBB" } });
+    expect(quota.take).toHaveBeenCalledTimes(1); expect(calls).toHaveLength(2);
+    expect(new URL(calls[0]!.url).searchParams.get("q")).toBe('"New Artist"|"Second Artist"');
+  });
+
+  it("batch omissions never become negative cache entries, and a cache-only peek spends no quota", async () => {
+    const cache = createMemoryLookupCache();
+    const inner: DynamicLookup = { lookup: vi.fn(async () => ({ kind: "none" as const })), lookupBatch: vi.fn(async () => ({ [unknown.entityId]: null })) };
+    const resolver = cachedLookup(inner, cache);
+    expect(await resolver.lookupBatch!([unknown], "fixture")).toEqual({ [unknown.entityId]: null });
+    expect(await resolver.peek!(unknown)).toBeNull();
+    await resolver.lookup(unknown, "fixture");
+    expect(inner.lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("ambiguous duplicate artist names in a batch cannot authorize the same recording twice", async () => {
+    const { fetcher } = fakeFetch(jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }])));
+    const resolver = createYouTubeDataLookup({ apiKey: "FIXTURE", timeoutMs: 1000, quota: okQuota, fetcher });
+    const out = await resolver.lookupBatch!([unknown, { ...unknown, entityId: "different-id" }], "fixture");
+    expect(Object.values(out).every((o) => o === null || o.kind !== "resolved")).toBe(true);
+  });
+
   it("accepts only a single matching Topic channel, embeddable and public; key stays in a header", async () => {
     const { fetcher, calls } = fakeFetch(
       jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "Fan Uploads" }])),

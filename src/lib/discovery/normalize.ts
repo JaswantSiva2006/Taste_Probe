@@ -120,9 +120,17 @@ export function normalizeTargetCandidates(
   seedEntityIds: string[],
   limit: number,
   target: { targetType: EntityType; provenance: ProviderResult<unknown>["provenance"] },
-): { candidates: RecommendationCandidate[]; rejected: number } {
+): { candidates: RecommendationCandidate[]; rejected: number; acquisition: { returned: number; normalized: number; rejections: Array<{ entityId: string; reason: string }> } } {
   const all = normalizeRecommendations(result, seedEntityIds, limit);
   const anchors = new Set(seedEntityIds.map((id) => id.toUpperCase()));
   const candidates = all.filter((c) => c.entityType === target.targetType && c.evidence.source === target.provenance && !anchors.has(c.entityId.toUpperCase()));
-  return { candidates, rejected: all.length - candidates.length };
+  const accepted = new Set(candidates.map((c) => c.entityId));
+  const seen = new Set<string>();
+  const rejections: Array<{ entityId: string; reason: string }> = [];
+  for (const raw of result.payload.results.entities) {
+    const reason = seen.has(raw.entity_id) ? "DUPLICATE_ENTITY" : anchors.has(raw.entity_id.toUpperCase()) ? "SOURCE_ARTIST_EXCLUDED" : classify(raw) !== target.targetType ? "WRONG_ENTITY_TYPE" : !accepted.has(raw.entity_id) ? "CANDIDATE_LIMIT_OR_PROVENANCE" : null;
+    seen.add(raw.entity_id);
+    if (reason) rejections.push({ entityId: raw.entity_id, reason });
+  }
+  return { candidates, rejected: all.length - candidates.length, acquisition: { returned: result.payload.results.entities.length, normalized: candidates.length, rejections: rejections.slice(0, 100) } };
 }

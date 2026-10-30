@@ -43,15 +43,25 @@ function certificate() {
   return { key: readFileSync(key), cert: readFileSync(cert) };
 }
 
-export function startQlooStub() {
+export function startQlooStub({ extended = false, retained = false } = {}) {
+  const recorded = retained ? JSON.parse(readFileSync(resolve(".artifacts/s9-16r/qloo-ledger.json"), "utf8")) : null;
   const server = createServer(certificate(), (req, res) => {
     const url = new URL(req.url ?? "/", "http://stub");
     const send = (body) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
-    if (url.pathname === "/search") return send({ results: [INTERSTELLAR] });
-    if (url.pathname === "/v2/insights") return send({ success: true, results: { entities: ARTISTS } });
+    if (url.pathname === "/search") return send({ results: recorded ? [{ entity_id: recorded.results.anchor.entityId, name: recorded.results.anchor.name, types: ["urn:entity:artist"] }] : [INTERSTELLAR] });
+    if (recorded && url.pathname === "/v2/insights") return send({ success: true, results: { entities: recorded.results.base.candidates.map((c) => ({ entity_id: c.entityId, name: c.name, subtype: "urn:entity:artist", tags: c.tags })) } });
+    if (url.pathname === "/v2/insights") return send({ success: true, results: { entities: extended ? [...ARTISTS,
+      a("41B1FF16-564C-4BC1-82F9-1FC443AC3D6D", "Greg Haines", 0.8, [AMBIENT]),
+      a("24259855-E26C-43A3-93E5-5BB4E09ABBBF", "Hildur Guðnadóttir", 0.79, [CLASSICAL]),
+      a("0D8EAFA4-CEEA-44D5-8E1F-26A8A9F49A77", "Nils Frahm", 0.78, [PIANO]),
+      a("34F09ED4-6170-4DF9-AB79-8348D2465EC5", "Hauschka", 0.77, [PIANO]),
+      a("37EA7EEF-A51E-4D54-9728-5BCFEB9B3E85", "A Winged Victory for the Sullen", 0.76, [AMBIENT]),
+      a("4358B267-4DF8-49FF-A4A2-5C84586EA882", "Philip Glass", 0.75, [CLASSICAL]),
+      a("76FD7956-0732-4F83-A6F0-DE21C07CE293", "Library Tapes", 0.74, [AMBIENT]),
+    ] : ARTISTS } });
     res.writeHead(404).end();
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));

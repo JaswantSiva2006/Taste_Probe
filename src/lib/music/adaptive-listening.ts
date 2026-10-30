@@ -17,7 +17,7 @@ export const TasteStateSchema = z.object({
   version: z.literal(1), policyVersion: z.literal("context-v1"),
   originalAnchor: z.object({ id: z.string(), domain: z.string(), name: z.string() }),
   explicitAnswers: z.array(z.object({ questionId: z.string(), response: z.string(), targetIds: z.array(z.string()) })).max(100),
-  explicitTrackLoves: z.array(z.string()).max(100), explicitTrackDislikes: z.array(z.string()).max(100),
+  explicitTrackLoves: z.array(z.string()).max(600), explicitTrackDislikes: z.array(z.string()).max(600),
   explicitArtistPreferences: z.array(z.object({ artistId: z.string(), action: z.string() })).max(100),
   featureEvidence: z.array(z.object({ id: z.string(), positive: z.number(), negative: z.number(), references: z.array(z.string()) })).max(100),
   activeHypotheses: z.array(z.object({ id: z.string(), uncertainty: z.literal("high"), references: z.array(z.string()) })).max(100),
@@ -31,7 +31,7 @@ export function tasteOf(state: SessionState, l: ListeningState): TasteState {
   const reactions = trackReactions(l);
   const features = new Map<string, { id: string; positive: number; negative: number; references: string[] }>();
   for (const [videoId, action] of reactions) {
-    const artistId = l.encounters.find((e) => e.videoId === videoId)?.artistId;
+    const artistId = l.trackFeedback.find((e) => e.videoId === videoId)?.artistId;
     const tags = state.candidates.find((c) => c.entityId === artistId)?.tags ?? [];
     for (const tag of tags) {
       const f = features.get(tag.id) ?? { id: tag.id, positive: 0, negative: 0, references: [] };
@@ -62,7 +62,7 @@ const overlap = (a: string[], b: string[]) => {
   return a.filter((id) => bs.has(id)).length / Math.sqrt(a.length * b.length);
 };
 
-export type ContextRank = { option: VerifiedSongOption; score: number; anchor: number; answer: number; transfer: number; novelty: number; evidenceRefs: string[] };
+export type ContextRank = { option: VerifiedSongOption; score: number; baseScore: number; diversityPenalty: number; anchor: number; answer: number; transfer: number; novelty: number; evidenceRefs: string[] };
 
 /** Rank within the authorized candidate reservoir; raw affinities from different queries are never mixed. */
 export function rankRecordings(state: SessionState, l: ListeningState, inventory: VerifiedSongOption[], evidence: MusicEvidence[] = [], now = Date.now()): ContextRank[] {
@@ -75,9 +75,10 @@ export function rankRecordings(state: SessionState, l: ListeningState, inventory
   const anchorRank = new Map(byAnchor.map((c, i) => [c.entityId, i]));
   const latestArtists = new Map(l.artistFeedback.map((f) => [f.artistId, f.action]));
   const exposure = new Map<string, number>();
-  for (const e of l.encounters) exposure.set(e.artistId, (exposure.get(e.artistId) ?? 0) + 1);
-  const liked = taste.explicitTrackLoves.map((v) => candidates.get(l.encounters.find((e) => e.videoId === v)?.artistId ?? "")).filter((c): c is RecommendationCandidate => !!c);
-  const disliked = taste.explicitTrackDislikes.map((v) => candidates.get(l.encounters.find((e) => e.videoId === v)?.artistId ?? "")).filter((c): c is RecommendationCandidate => !!c);
+  if (l.artistExposure) for (const e of l.artistExposure) exposure.set(e.artistId, e.count);
+  else for (const e of l.encounters) exposure.set(e.artistId, (exposure.get(e.artistId) ?? 0) + 1);
+  const liked = taste.explicitTrackLoves.map((v) => candidates.get(l.trackFeedback.find((e) => e.videoId === v)?.artistId ?? "")).filter((c): c is RecommendationCandidate => !!c);
+  const disliked = taste.explicitTrackDislikes.map((v) => candidates.get(l.trackFeedback.find((e) => e.videoId === v)?.artistId ?? "")).filter((c): c is RecommendationCandidate => !!c);
   const feedbackWeight = Math.min(0.3, (liked.length + disliked.length) * 0.05);
   const unique = new Set<string>();
   return inventory.flatMap((option): ContextRank[] => {
@@ -101,7 +102,17 @@ export function rankRecordings(state: SessionState, l: ListeningState, inventory
         }
       }
     }
-    const score = (0.5 - feedbackWeight / 2) * anchor + 0.35 * answer + feedbackWeight * transfer + 0.18 * novelty + 0.2 * musical;
-    return [{ option, score, anchor, answer, transfer, novelty, evidenceRefs: [...new Set([`artist:${c.entityId}`, ...taste.explicitAnswers.map((a) => `answer:${a.questionId}`), ...taste.featureEvidence.filter((f) => tags.includes(f.id)).flatMap((f) => f.references), ...(profile ? [profile.sourceRef] : [])])] }];
+    const baseScore = (0.5 - feedbackWeight / 2) * anchor + 0.35 * answer + feedbackWeight * transfer + 0.18 * novelty + 0.2 * musical;
+    const recent = l.encounters.slice(-8);
+    const share = recent.length ? recent.filter((e) => e.artistId === c.entityId).length / recent.length : 0;
+    let consecutive = 0;
+    for (const e of [...recent].reverse()) { if (e.artistId !== c.entityId) break; consecutive++; }
+    const reactions = l.trackFeedback.filter((f) => f.artistId === c.entityId);
+    const negativePressure = reactions.filter((f) => f.action === "not_for_me").length / (1 + reactions.length);
+    const recentSimilarity = recent.length ? recent.reduce((sum, e) => sum + overlap(tags, candidates.get(e.artistId)?.tags.map((t) => t.id) ?? []), 0) / recent.length : 0;
+    // Contextual MMR-style soft redundancy, never a hard artist rotation or tag exclusion.
+    const diversityPenalty = 0.24 * share + 0.08 * Math.min(1, consecutive / 3) + 0.18 * negativePressure + 0.06 * recentSimilarity;
+    const score = baseScore - diversityPenalty;
+    return [{ option, score, baseScore, diversityPenalty, anchor, answer, transfer, novelty, evidenceRefs: [...new Set([`artist:${c.entityId}`, ...taste.explicitAnswers.map((a) => `answer:${a.questionId}`), ...taste.featureEvidence.filter((f) => tags.includes(f.id)).flatMap((f) => f.references), ...(profile ? [profile.sourceRef] : [])])] }];
   }).sort((a, b) => b.score - a.score || a.option.videoId.localeCompare(b.option.videoId));
 }

@@ -1,5 +1,6 @@
 import "server-only";
 import { rankRecordings, tasteOf } from "@/lib/music/adaptive-listening";
+import { supplySnapshot, supplyPolicy, type SupplyState } from "@/lib/music/supply";
 import type {
   AgentDecision,
   AnswerRequest,
@@ -115,7 +116,10 @@ type UsageLedger = { qlooCalls: number; toolCalls: number };
  * outlive their worst case: 2 Qloo attempts plus 2 decisions x 2 Gemini requests, plus slack.
  */
 const leaseTtlFor = (config: AppConfig) =>
-  config.qloo.timeoutMs * 2 + config.llm.timeoutMs * (MAX_REQUESTS_PER_DECISION * 2 + 1) + 10_000;
+  Math.max(
+    config.qloo.timeoutMs * 2 + config.llm.timeoutMs * (MAX_REQUESTS_PER_DECISION * 2 + 1) + 10_000,
+    config.features.adaptiveListening ? config.music.timeoutMs * 8 + config.qloo.timeoutMs + config.llm.timeoutMs * 2 + 40_000 : 0,
+  );
 
 const sessionsOf = (deps: DiscoveryDeps): SessionService =>
   createSessionService({
@@ -123,7 +127,7 @@ const sessionsOf = (deps: DiscoveryDeps): SessionService =>
     settings: deps.config.session,
     mode: deps.config.mode,
     now: deps.now,
-    leaseTtlMs: deps.boundedAgent ? leaseTtlFor(deps.config) : undefined,
+    leaseTtlMs: deps.boundedAgent || deps.config.features.adaptiveListening ? leaseTtlFor(deps.config) : undefined,
   });
 
 function withUsage(state: SessionState, ledger: UsageLedger): SessionState {
@@ -278,13 +282,14 @@ async function runAgent(
     }
     const used = Math.max(1, result.requestCount);
     ledger.qlooCalls += used;
-    const { candidates } = normalizeTargetCandidates(result, current.session.anchorIds, limits.maxRecommendationCandidates, {
+    const { candidates, acquisition } = normalizeTargetCandidates(result, current.session.anchorIds, limits.maxRecommendationCandidates, {
       targetType: current.session.targetType,
       provenance: result.provenance,
     });
     current = {
       ...current,
       candidates,
+      acquisition,
       session: {
         ...current.session,
         qlooCallCount: current.session.qlooCallCount + used,
@@ -1098,14 +1103,19 @@ function listeningArtistOrder(deps: DiscoveryDeps, state: SessionState): string[
   return [...new Set([...shown, ...all])];
 }
 
-async function songOptions(deps: DiscoveryDeps, state: SessionState, artistId: string): Promise<VerifiedSongOption[]> {
+async function songResolution(deps: DiscoveryDeps, state: SessionState, artistId: string) {
   const c = state.candidates.find((x) => x.entityId === artistId);
-  if (!c) return [];
+  if (!c) return null;
   const resolution = await resolveArtistVideo(
     { entityId: c.entityId, name: c.name, provenance: c.evidence.source },
     { explorationId: state.session.sessionId, now: new Date(nowOf(deps)), momentReview: deps.config.music.momentReview, dynamic: deps.musicLookup },
   );
-  return optionsFrom(resolution);
+  return resolution;
+}
+
+async function songOptions(deps: DiscoveryDeps, state: SessionState, artistId: string): Promise<VerifiedSongOption[]> {
+  const result = await songResolution(deps, state, artistId);
+  return result ? optionsFrom(result) : [];
 }
 
 /** Only explicit, confirmed evidence: track reactions and answered-question preferences. */
@@ -1168,29 +1178,105 @@ async function chooseSong(deps: DiscoveryDeps, state: SessionState, listening: L
   return { option: chosen, selection: { mode: "GEMINI", reasonCode: r.reasonCode, fallbackReason: null, eligibleCount: count } };
 }
 
-type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number };
+type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number; supplyUpdates: { state?: SessionState; retrievalAttempted?: boolean } };
 
 /** Bounded cross-artist supply. Reviewed mappings cost no lookup; dynamic attempts retain shared quotas. */
 async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = false, differentArtist = false): Promise<ListeningState> {
   let l = { ...listening, upNext: null };
   const inventory = [...(l.inventory ?? []), ...l.options];
-  let dynamicAttempts = 0;
-  const unavailable = new Set(l.unavailableArtistIds);
+  const resolutions: SupplyState["resolutions"] = (l.supply?.resolutions ?? []).filter((r) => t.state.candidates.some((c) => c.entityId === r.artistId));
+  const saveResolution = (entry: SupplyState["resolutions"][number]) => {
+    const index = resolutions.findIndex((r) => r.artistId === entry.artistId);
+    if (index >= 0) resolutions[index] = entry; else resolutions.push(entry);
+  };
   const ids = listeningArtistOrder(t.deps, t.state).filter((id) => !excludedArtists(t.state).has(id));
+  const remember = (r: NonNullable<Awaited<ReturnType<typeof songResolution>>>) => {
+    const options = optionsFrom(r);
+    inventory.push(...options);
+    const retryAt = r.status === "RESOLVED" ? t.at + 86_400_000 : r.status === "UPSTREAM_FAILURE" ? t.at + 30_000 : r.status === "RATE_LIMITED" ? t.state.session.expiresAt : t.at + 6 * 3_600_000;
+    const entry = { artistId: r.artist.entityId, status: r.status, reason: r.reason, lookup: r.dynamicLookup, checkedAt: t.at, retryAt, options: options.length };
+    saveResolution(entry);
+  };
+  let cacheChecks = 0;
+  const cacheCandidates: Array<{ entityId: string; name: string }> = [];
+  // Exhaust the free supply first. Cached negatives retain their exact reason and retry time.
   for (const id of ids.slice(0, 90)) {
-    if (inventory.some((o) => o.artistId === id) || unavailable.has(id)) continue;
-    if (!reviewedMappingFor(id) && dynamicAttempts >= 3) continue;
-    if (!reviewedMappingFor(id)) dynamicAttempts++;
-    try {
-      const options = await songOptions(t.deps, t.state, id);
-      if (options.length) inventory.push(...options);
-      else unavailable.add(id);
-    } catch { /* Feedback survives resolver/network failure. Retry in a future exploration. */ unavailable.add(id); }
+    if (inventory.some((o) => o.artistId === id) || resolutions.some((r) => r.artistId === id && r.retryAt > t.at)) continue;
+    if (!reviewedMappingFor(id)) {
+      if (!t.deps.musicLookup) {
+        const result = await songResolution(t.deps, t.state, id);
+        if (result) remember(result);
+        continue;
+      }
+      if (resolutions.some((r) => r.artistId === id && r.status === "UNRESOLVED" && t.at - r.checkedAt < 60_000)) continue;
+      if (!t.deps.musicLookup?.peek || cacheChecks++ >= 6) continue;
+      cacheCandidates.push({ entityId: id, name: candidateName(t.state, id) });
+    } else {
+      const result = await songResolution({ ...t.deps, musicLookup: undefined }, t.state, id);
+      if (result) remember(result);
+    }
   }
-  const unique = [...new Map(inventory.map((o) => [`${o.artistId}:${o.videoId}`, o])).values()].slice(0, 180);
-  l = { ...l, inventory: unique, unavailableArtistIds: [...unavailable].slice(-100) };
-  const ranked = rankRecordings(t.state, l, unique, [], t.at).filter((r) => !differentArtist || r.option.artistId !== l.currentArtistId);
-  if (!ranked.length) return prepareOnly ? { ...l, notice: "verified_inventory_exhausted" } : { ...l, currentVideoId: null, selection: null, preview: null, notice: "verified_inventory_exhausted" };
+  const cacheHits = await Promise.all(cacheCandidates.map((artist) => t.deps.musicLookup!.peek!(artist).catch(() => null)));
+  for (let i = 0; i < cacheCandidates.length; i++) {
+    const id = cacheCandidates[i]!.entityId, hit = cacheHits[i];
+    if (!hit) { saveResolution({ artistId: id, status: "UNRESOLVED", reason: "cache_miss_not_a_negative_result", lookup: "CACHE_MISS", checkedAt: t.at, retryAt: t.at, options: 0 }); continue; }
+    const result = await songResolution({ ...t.deps, musicLookup: { lookup: async () => hit } }, t.state, id);
+    if (result) remember(result);
+  }
+  const sync = () => {
+    const unique = [...new Map(inventory.map((o) => [`${o.artistId}:${o.videoId}`, o])).values()].filter((o) => ids.includes(o.artistId)).slice(0, 540);
+    l = { ...l, inventory: unique, supply: { ...supplySnapshot(t.state.candidates, l, t.at, [...excludedArtists(t.state)]), resolutions: resolutions.slice(0, 90) } };
+    const ranks = rankRecordings(t.state, l, unique, [], t.at).filter((r) => !differentArtist || r.option.artistId !== l.currentArtistId);
+    const unresolved = ids.filter((id) => !inventory.some((o) => o.artistId === id) && !resolutions.some((r) => r.artistId === id && r.retryAt > t.at));
+    const snapshot = supplySnapshot(t.state.candidates, l, t.at, [...excludedArtists(t.state)]);
+    const quotaClosed = resolutions.some((r) => r.status === "RATE_LIMITED" && r.retryAt > t.at);
+    const policy = supplyPolicy({ snapshot, bestScore: ranks[0]?.score ?? null, unresolved: unresolved.length, canLookup: !!t.deps.musicLookup && !quotaClosed, canFetch: !!(t.deps.config.features.adaptivePool && t.state.adaptivePool && t.state.session.qlooCallCount + t.ledger.qlooBudgetCalls < t.deps.config.limits.maxQlooCallsPerSession) });
+    l = { ...l, supply: { ...snapshot, ...policy } };
+    return { ranks, unresolved, policy };
+  };
+  let available = sync();
+  let batches = 0;
+  while (available.policy.decision === "LOCAL_RESOLVE" && t.deps.musicLookup?.lookupBatch && batches++ < 2) {
+    const artists = available.unresolved.slice(0, 6).map((id) => ({ entityId: id, name: candidateName(t.state, id) }));
+    if (!artists.length) break;
+    try {
+      const found = await t.deps.musicLookup.lookupBatch(artists, t.state.session.sessionId);
+      for (const artist of artists) {
+        const result = found[artist.entityId];
+        if (result) {
+          const resolution = await songResolution({ ...t.deps, musicLookup: { lookup: async () => result } }, t.state, artist.entityId);
+          if (resolution) remember(resolution);
+        } else saveResolution({ artistId: artist.entityId, status: "DEFERRED", reason: "batch_query_no_verified_result", lookup: "BATCH_DEFERRED", checkedAt: t.at, retryAt: t.state.session.expiresAt, options: 0 });
+      }
+    } catch { for (const artist of artists) saveResolution({ artistId: artist.entityId, status: "UPSTREAM_FAILURE", reason: "batch_lookup_failed", lookup: "FAILED", checkedAt: t.at, retryAt: t.at + 30_000, options: 0 }); }
+    available = sync();
+  }
+  for (const id of !t.deps.musicLookup?.lookupBatch && available.policy.decision === "LOCAL_RESOLVE" ? available.unresolved.slice(0, 3) : []) {
+    try {
+      const result = await songResolution(t.deps, t.state, id);
+      if (result) remember(result);
+    } catch { saveResolution({ artistId: id, status: "UPSTREAM_FAILURE", reason: "resolver_error", lookup: "FAILED", checkedAt: t.at, retryAt: t.at + 30_000, options: 0 }); }
+    available = sync();
+    if (available.policy.decision !== "LOCAL_RESOLVE") break;
+  }
+  if (available.policy.decision === "FETCH_ARTISTS" && !t.supplyUpdates.retrievalAttempted) {
+    t.supplyUpdates.retrievalAttempted = true;
+    const live: LiveDeps = { config: t.deps.config, provider: countingProvider(t.deps.provider, t.ledger), boundedAgent: t.deps.boundedAgent!, questionGenerator: t.deps.questionGenerator, now: t.deps.now ?? Date.now };
+    try {
+    const tags = new Set(t.state.candidates.flatMap((c) => c.tags.map((tag) => tag.id)));
+    const playableCandidateIds = [...new Set(available.ranks.map((r) => r.option.artistId))];
+    const refreshed = await retrieveAdaptive(live, { ...t.state, listening: l }, t.ledger, { positiveTagIds: t.state.session.positiveTagIds.filter((id) => tags.has(id)), positiveEntityIds: t.state.session.positiveEntityIds.filter((id) => t.state.candidates.some((c) => c.entityId === id)), playableCandidateIds, exhaustedArtistIds: ids.filter((id) => !playableCandidateIds.includes(id) && (inventory.some((o) => o.artistId === id) || resolutions.some((r) => r.artistId === id && r.status !== "UPSTREAM_FAILURE"))) });
+    t.supplyUpdates.state = refreshed.state;
+    if (refreshed.addedIds.length) return adaptiveNext({ ...t, state: refreshed.state }, l, prepareOnly, differentArtist);
+    l = { ...l, supply: { ...l.supply!, decision: available.ranks.length ? "DEGRADED_KEEP" : "EXHAUSTED", reasons: refreshed.reasons } };
+    } catch { l = { ...l, supply: { ...l.supply!, decision: available.ranks.length ? "DEGRADED_KEEP" : "EXHAUSTED", reasons: ["SUPPLY_FETCH_FAILED"] } }; }
+  }
+  const unique = l.inventory!;
+  const ranked = available.ranks;
+  if (!ranked.length) {
+    const supply = { ...l.supply!, selectedArtistId: null, selectedVideoId: null };
+    return prepareOnly ? { ...l, supply, notice: "verified_inventory_exhausted" } : { ...l, supply, currentVideoId: null, selection: null, preview: null, notice: "verified_inventory_exhausted" };
+  }
   const shortlist = ranked.slice(0, 6);
   const meaningful = l.trackFeedback.at(-1)?.revision === t.revision;
   let chosen = (!prepareOnly && !meaningful && listening.upNext ? ranked.find((r) => r.option.videoId === listening.upNext?.videoId && r.option.artistId === listening.upNext.artistId) : undefined) ?? shortlist[0]!;
@@ -1217,15 +1303,16 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
       if (r.costUsd === null) t.ledger.geminiCostKnown = false; else t.ledger.geminiCostUsd += r.costUsd;
       const proposed = r.ok ? shortlist.find((c) => c.option.videoId === r.videoId) : undefined;
       // Bounded influence: a model cannot overturn a strong deterministic conflict.
-      if (proposed && proposed.score >= shortlist[0]!.score - 0.15 && proposed.answer >= shortlist[0]!.answer - 0.05) { chosen = proposed; mode = "GEMINI"; fallbackReason = null; reasonCode = r.ok ? r.reasonCode : reasonCode; }
+      if (proposed && proposed.score >= shortlist[0]!.score - 0.15 && proposed.answer >= shortlist[0]!.answer - 0.05 && proposed.diversityPenalty <= shortlist[0]!.diversityPenalty + 0.06) { chosen = proposed; mode = "GEMINI"; fallbackReason = null; reasonCode = r.ok ? r.reasonCode : reasonCode; }
       else fallbackReason = r.ok ? (proposed && proposed.answer < shortlist[0]!.answer - 0.05 ? "explicit_answer_priority" : "outside_contextual_margin") : `gemini_${r.error}`;
     } catch { /* Accounted attempt; deterministic continuation retains feedback. */ }
   }
-  l = { ...l, contextualDecision: { videoId: chosen.option.videoId, mode, reasonCode, fallbackReason, score: chosen.score, evidenceRefs: chosen.evidenceRefs.slice(0, 100), atRevision: t.revision } };
+  l = { ...l, supply: { ...l.supply!, selectedArtistId: chosen.option.artistId, selectedVideoId: chosen.option.videoId }, contextualDecision: { videoId: chosen.option.videoId, mode, reasonCode, fallbackReason, score: chosen.score, evidenceRefs: chosen.evidenceRefs.slice(0, 100), atRevision: t.revision } };
   if (prepareOnly) return { ...l, upNext: chosen.option, notice: "up_next_prepared", geminiSongRequests: l.geminiSongRequests + (mode === "GEMINI" ? 1 : 0) };
-  return encounter(t, l, chosen.option.artistId, unique.filter((o) => o.artistId === chosen.option.artistId), {
+  const presented = encounter(t, l, chosen.option.artistId, unique.filter((o) => o.artistId === chosen.option.artistId), {
     option: chosen.option, selection: { mode, reasonCode, fallbackReason, eligibleCount: ranked.length },
   }, "adaptive_next_ready");
+  return { ...presented, supply: { ...supplySnapshot(t.state.candidates, presented, t.at, [...excludedArtists(t.state)]), decision: l.supply!.decision, reasons: l.supply!.reasons } };
 }
 
 /** Approved reviewer notes for windows of one recording (registry moments only). */
@@ -1350,20 +1437,11 @@ async function listeningTurn(deps: DiscoveryDeps, sessionToken: string, kind: st
   assertListenable(loaded.state);
   const lease = await sessions.acquire(loaded);
   const ledger = newLedger();
-  const t: Turn = { deps, state: loaded.state, ledger, at: nowOf(deps), revision: lease.revision + 1 };
+  const t: Turn = { deps, state: deps.config.features.adaptiveListening ? enableAdaptivePool(deps, loaded.state) : loaded.state, ledger, at: nowOf(deps), revision: lease.revision + 1, supplyUpdates: {} };
   let next: SessionState;
   try {
     next = await run(t);
-    // Exhaustion can reuse only the already-validated adaptive query families and explicit signals.
-    // No track reaction becomes a new Qloo artist/tag preference. Hashes and cumulative budgets apply.
-    if (deps.config.features.adaptiveListening && deps.config.features.adaptivePool && next.adaptivePool && next.listening && kind !== "love" && kind !== "save" && kind !== "finish" && next.listening.notice === "verified_inventory_exhausted") {
-      try {
-        const live: LiveDeps = { config: deps.config, provider: countingProvider(deps.provider, ledger), boundedAgent: deps.boundedAgent!, questionGenerator: deps.questionGenerator, now: deps.now ?? Date.now };
-        const refreshed = await retrieveAdaptive(live, next, ledger, { positiveTagIds: next.session.positiveTagIds, positiveEntityIds: next.session.positiveEntityIds });
-        next = refreshed.state;
-        if (next.candidates.some((c) => !t.state.candidates.some((old) => old.entityId === c.entityId))) next = { ...next, listening: await adaptiveNext({ ...t, state: next }, next.listening!) };
-      } catch { /* Exact feedback and the last verified inventory survive a failed replenishment. */ }
-    }
+    if (t.supplyUpdates.state) next = { ...next, candidates: t.supplyUpdates.state.candidates, adaptivePool: t.supplyUpdates.state.adaptivePool, acquisition: t.supplyUpdates.state.acquisition };
     next = applyLedger(await withPreview(t, next), ledger);
     if (deps.config.features.adaptiveListening && next.listening) next = { ...next, taste: tasteOf(next, next.listening) };
   } catch (error) {
@@ -1385,6 +1463,9 @@ async function listeningTurn(deps: DiscoveryDeps, sessionToken: string, kind: st
     geminiRequests: ledger.geminiRequests,
     qlooCalls: ledger.qlooBudgetCalls,
     sessionStore: deps.store.kind,
+    adaptiveListening: !!deps.config.features.adaptiveListening,
+    adaptivePool: !!deps.config.features.adaptivePool,
+    ...(l.supply ? { supply: { ...l.supply.funnel, decision: l.supply.decision, reasons: l.supply.reasons, acquisition: next.acquisition, ...(deps.config.features.evaluationLogging ? { exclusions: l.supply.exclusions, resolutions: l.supply.resolutions } : {}) } } : {}),
   });
   return toView(deps, next, loaded.state.order, presentingDecision(next), token, lease.revision + 1);
 }

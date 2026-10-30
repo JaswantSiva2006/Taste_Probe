@@ -1,5 +1,11 @@
 # Release handoff
 
+## S9.16R controlled release candidate
+
+Branch `seg/S9-16R-discovery-intelligence`, based on `024d305`. See [the complete supply repair report](discovery-supply-intelligence.md). No push, merge or deployment has been performed. Public main was observed at `e9167c4`; public health is live/Redis-ready, but the deployed SHA and production flags were not exposed.
+
+The candidate uses up to 50 artists per supported Qloo request, a 90-artist reservoir, a bounded playable inventory and batch YouTube verification within the existing two-search limit. Both adaptive flags still default to false. Review host overrides and promote only through an explicitly approved preview; `MAX_RECOMMENDATION_CANDIDATES=50` is the verified setting. The new six-request Qloo campaign is exhausted at 6/6, separately from S9.14's unchanged 18/18. Do not rerun it without another allowance. No new paid Gemini calls or billing changes occurred. Passport rollback is preserved.
+
 ## S9.15 current handoff — music-only product
 
 Branch `seg/S9-15-music-only-rebrand-previews`, based on `fbbaf38`. See `music-final-polish.md`.

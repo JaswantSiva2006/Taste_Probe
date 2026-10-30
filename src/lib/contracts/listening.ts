@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SupplyStateSchema } from "@/lib/music/supply";
 
 /**
  * S9.12 listening loop contracts. Two layers stay separate:
@@ -117,7 +118,8 @@ export const ListeningStateSchema = z.object({
   visitedArtistIds: z.array(EntityId).max(100),
   unavailableArtistIds: z.array(EntityId).max(100),
   encounters: z.array(z.object({ artistId: EntityId, artistName: z.string(), videoId: VideoId, title: z.string(), at, revision: rev, selection: z.enum(["GEMINI", "DETERMINISTIC", "SINGLE_OPTION", "USER_REPLAY"]) })).max(100),
-  trackFeedback: z.array(z.object({ artistId: EntityId, videoId: VideoId, action: z.enum(["love", "not_for_me"]), at, revision: rev })).max(100),
+  trackFeedback: z.array(z.object({ artistId: EntityId, videoId: VideoId, action: z.enum(["love", "not_for_me"]), at, revision: rev })).max(600),
+  artistExposure: z.array(z.object({ artistId: EntityId, count: z.number().int().positive() })).max(600).optional(),
   artistFeedback: z.array(z.object({ artistId: EntityId, action: z.enum(["like_artist", "not_this_artist"]), at, revision: rev })).max(100),
   navigation: z.array(z.object({ action: z.enum(["NEXT", "ANOTHER_SONG", "DIFFERENT_ARTIST", "START", "PREVIOUS"]), artistId: EntityId.nullable(), videoId: VideoId.nullable(), at, revision: rev })).max(200),
   saved: z.array(SavedDiscoverySchema).max(50),
@@ -126,7 +128,8 @@ export const ListeningStateSchema = z.object({
   preview: PreviewSelectionSchema.nullable().optional(),
   geminiPreviewRequests: z.number().int().nonnegative().optional(),
   /** S9.16 bounded verified inventory; absent in earlier sessions. */
-  inventory: z.array(VerifiedSongOptionSchema).max(180).optional(),
+  inventory: z.array(VerifiedSongOptionSchema).max(540).optional(),
+  supply: SupplyStateSchema.optional(),
   /** Independent of the bounded UI encounter log: automatic recommendations cannot forget old IDs. */
   seenRecordingIds: z.array(VideoId).max(600).optional(),
   upNext: VerifiedSongOptionSchema.nullable().optional(),

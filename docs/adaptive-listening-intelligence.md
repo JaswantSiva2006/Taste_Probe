@@ -1,5 +1,7 @@
 # S9.16 adaptive listening intelligence
 
+S9.16R supersedes the supply, inventory-size, expansion and exposure details below. See [discovery supply intelligence](discovery-supply-intelligence.md) for the verified 50-artist acquisition, multi-artist video lookup and bounded supply controller. The following S9.16 report describes commit `024d305`; its audio-understanding limitations remain.
+
 Status: **PARTIAL**. The flagged continuous-feedback engine is implemented and tested, including real Gemini/Redis comparison. Full musical personalization is not established: current production recordings have verified identities but no independently checked sound profiles. Direct video enrichment failed the unresolved-policy gate, and no human preference study was performed. Do not advertise this as verified audio understanding or a demonstrated satisfaction gain.
 
 ## Baseline and root causes

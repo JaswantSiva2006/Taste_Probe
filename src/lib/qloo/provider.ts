@@ -12,6 +12,8 @@ export type RecommendationRequest = {
   includeExplainability?: boolean;
   /** Caps upstream attempts so retries cannot exceed the session budget. */
   maxAttempts?: number;
+  /** Verified on hackathon.api.qloo.com in S9.16R; supply planner gates host and range. */
+  page?: number;
 };
 
 /**

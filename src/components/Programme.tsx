@@ -224,7 +224,8 @@ export function Programme(p: Props) {
       ) : null}
 
       <footer className="tp-programme__foot">
-        <TasteNotes view={view} names={names} title="What you told us" empty="No preferences were confirmed, so nothing was assumed about you." />
+        <TasteNotes view={view} names={names} title="What you told us" empty={view.listening ? "No question preferences have been confirmed yet." : "No preferences were confirmed, so nothing was assumed about you."} />
+        {view.listening?.history.some((item) => item.feedback) ? <p className="tp-programme__meta">Your recording reactions are remembered separately.</p> : null}
         <div className="tp-programme__restart">
           <button type="button" className="tp-btn tp-btn--ghost" onClick={p.onRestart} disabled={p.busy}>
             Start somewhere new
@@ -279,7 +280,8 @@ function AcceptedProgramme({ view, names, onRestart, onNewAnchor }: Props) {
         </section>
       ) : null}
       <footer className="tp-programme__foot">
-        <TasteNotes view={view} names={names} title="What you told us" empty="No preferences were confirmed, so nothing was assumed about you." />
+        <TasteNotes view={view} names={names} title="What you told us" empty={view.listening ? "No question preferences have been confirmed yet." : "No preferences were confirmed, so nothing was assumed about you."} />
+        {view.listening?.history.some((item) => item.feedback) ? <p className="tp-programme__meta">Your recording reactions are remembered separately.</p> : null}
         <div className="tp-programme__restart">
           <button type="button" className="tp-btn tp-btn--amber" onClick={onRestart}>
             <span>Start somewhere new</span>

@@ -62,7 +62,7 @@ const EnvSchema = z.object({
   // S9.6: cumulative Gemini requests per exploration (all rounds). MAX_QLOO_CALLS_PER_SESSION is
   // already cumulative per exploration because rounds share one session record.
   MAX_GEMINI_REQUESTS_PER_EXPLORATION: int(20, 2, 200),
-  MAX_RECOMMENDATION_CANDIDATES: int(30, 2, 50),
+  MAX_RECOMMENDATION_CANDIDATES: int(50, 2, 50),
   FINAL_RECOMMENDATION_COUNT: int(5, 1, 5),
 
   ENABLE_ADAPTIVE_QUESTIONING: bool(true),

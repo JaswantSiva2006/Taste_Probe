@@ -5,7 +5,7 @@ import type { RecommendationCandidate } from "@/lib/contracts";
 export const ADAPTIVE_POOL_MAX_CANDIDATES = 90;
 export const POOL_DECISIONS = ["KEEP", "LOCAL_REPLACE", "FETCH_AND_MERGE", "EXPAND", "DEGRADED_KEEP"] as const;
 export type PoolDecision = (typeof POOL_DECISIONS)[number];
-export const QUERY_FAMILIES = ["BASE", "PROFILE_REFRESH", "TAG_FOCUS", "PAGINATE", "DIVERSIFY"] as const;
+export const QUERY_FAMILIES = ["BASE", "PROFILE_REFRESH", "TAG_FOCUS", "PAGINATE", "DIVERSIFY", "VALIDATED_EXCLUSION_REFRESH"] as const;
 
 const PoolOriginSchema = z.object({ family: z.enum(QUERY_FAMILIES), queryHash: z.string().length(24), rank: z.number().int().positive(), requestId: z.string().min(1) });
 const PoolEntrySchema = z.object({
@@ -65,7 +65,8 @@ export function createQueryPlan(input: {
   if ([...seedEntityIds, ...positiveEntityIds, ...excludedCandidateIds].some((id) => !input.knownEntityIds.has(id))) throw new Error("query_plan_unknown_entity");
   if (positiveTagIds.some((id) => !input.knownTagIds.has(id))) throw new Error("query_plan_unknown_tag");
   if (input.family === "PAGINATE" && !input.cursor) throw new Error("query_plan_missing_cursor");
-  if ((input.family === "PAGINATE" || input.family === "DIVERSIFY") && input.executable) throw new Error("query_plan_family_not_executable");
+  if (input.family === "DIVERSIFY" && input.executable) throw new Error("query_plan_family_not_executable");
+  if (input.family === "PAGINATE" && input.executable && !/^page:[2-6]$/.test(input.cursor ?? "")) throw new Error("query_plan_family_not_executable");
   const core = {
     endpoint: "/v2/insights" as const, family: input.family, targetType: input.targetType, seedEntityIds,
     positiveEntityIds, positiveTagIds, excludedCandidateIds, take: input.take ?? 30,
@@ -77,13 +78,31 @@ export function createQueryPlan(input: {
 export function planAdaptiveRetrieval(input: {
   pool: AdaptivePoolState; candidates: RecommendationCandidate[]; anchorIds: string[]; targetType: string;
   newPositiveEntityIds: string[]; newPositiveTagIds: string[]; take: number; includeExplainability: boolean;
+  /** Listening runway: known artists with an unseen playable option, not merely catalog entries. */
+  playableCandidateIds?: string[];
+  supplyExpansion?: { verified: boolean; exhaustedArtistIds: string[] };
 }): { decision: PoolDecision; reasons: string[]; plan: QueryPlan | null } {
-  if (!input.newPositiveEntityIds.length && !input.newPositiveTagIds.length) return { decision: evaluatePool(input.pool).decision, reasons: ["no_new_positive_signal"], plan: null };
   const knownEntityIds = new Set([...input.anchorIds, ...input.candidates.map((candidate) => candidate.entityId)]);
   const knownTagIds = new Set(input.candidates.flatMap((candidate) => candidate.tags.map((tag) => tag.id)));
+  const expand = () => {
+    if (input.pool.transitionHistory.filter((t) => t.outcome === "empty").length >= 2) return { decision: "DEGRADED_KEEP" as const, reasons: ["unproductive_supply_queries"], plan: null };
+    if (input.supplyExpansion?.verified) {
+      const exclusions = input.supplyExpansion.exhaustedArtistIds.filter((id) => knownEntityIds.has(id));
+      const proposals = [
+        ...(exclusions.length ? [{ family: "VALIDATED_EXCLUSION_REFRESH" as const, excludedCandidateIds: exclusions }] : []),
+        ...[2, 3, 4, 5, 6].map((page) => ({ family: "PAGINATE" as const, cursor: `page:${page}` })),
+      ];
+      for (const proposal of proposals) {
+        const plan = createQueryPlan({ ...proposal, targetType: input.targetType, seedEntityIds: input.anchorIds, take: input.take, knownEntityIds, knownTagIds, executable: true });
+        if (!input.pool.attemptedQueryHashes.includes(plan.queryHash)) return { decision: "FETCH_AND_MERGE" as const, reasons: [proposal.family === "PAGINATE" ? "verified_next_page" : "exhausted_artists_excluded_for_supply"], plan };
+      }
+    }
+    return { decision: "DEGRADED_KEEP" as const, reasons: ["query_already_attempted_or_no_valid_supply_plan"], plan: null };
+  };
+  if (!input.newPositiveEntityIds.length && !input.newPositiveTagIds.length) return input.supplyExpansion ? expand() : { decision: evaluatePool(input.pool).decision, reasons: ["no_new_positive_signal"], plan: null };
   const family = input.newPositiveEntityIds.length ? "PROFILE_REFRESH" : "TAG_FOCUS";
   const signalIds = family === "PROFILE_REFRESH" ? input.newPositiveEntityIds : input.newPositiveTagIds;
-  const eligible = input.pool.entries.filter((entry) => !input.pool.rejectedIds.includes(entry.candidateId));
+  const eligible = input.pool.entries.filter((entry) => !input.pool.rejectedIds.includes(entry.candidateId) && (!input.playableCandidateIds || input.playableCandidateIds.includes(entry.candidateId)));
   const covered = family === "PROFILE_REFRESH"
     ? eligible.filter((entry) => signalIds.includes(entry.candidateId)).length
     : eligible.filter((entry) => entry.metadata.tagIds.some((id) => signalIds.includes(id))).length;
@@ -97,7 +116,7 @@ export function planAdaptiveRetrieval(input: {
     excludedCandidateIds: [], take: input.take, includeExplainability: input.includeExplainability,
     knownEntityIds, knownTagIds, executable: true,
   });
-  if (input.pool.attemptedQueryHashes.includes(plan.queryHash)) return { decision: "DEGRADED_KEEP", reasons: ["query_already_attempted"], plan: null };
+  if (input.pool.attemptedQueryHashes.includes(plan.queryHash)) return input.supplyExpansion ? expand() : { decision: "DEGRADED_KEEP", reasons: ["query_already_attempted"], plan: null };
   return { decision: "FETCH_AND_MERGE", reasons: [family === "PROFILE_REFRESH" ? "new_confirmed_entity_profile" : "confirmed_tag_underrepresented"], plan };
 }
 
@@ -147,6 +166,8 @@ const QLOO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function mergeAdaptiveCandidates(input: {
   current: RecommendationCandidate[]; incoming: RecommendationCandidate[]; pool: AdaptivePoolState;
   plan: QueryPlan; requestId: string; round: number; at: number; qlooCalls: number;
+  /** Current recording and saved references need retention without becoming preference pins. */
+  protectedIds?: string[];
 }): { candidates: RecommendationCandidate[]; pool: AdaptivePoolState; addedIds: string[] } {
   const validIncoming = input.incoming.filter((candidate) =>
     candidate.entityType === input.pool.targetType &&
@@ -188,12 +209,13 @@ export function mergeAdaptiveCandidates(input: {
     entry,
     score: entry.origins.reduce((sum, origin) => sum + 1 / (60 + origin.rank), 0),
   })).sort((a, b) => b.score - a.score || a.entry.origins[0]!.rank - b.entry.origins[0]!.rank || a.entry.candidateId.localeCompare(b.entry.candidateId));
-  const protectedIds = new Set([...input.pool.pinnedIds, ...input.pool.rejectedIds]);
+  const protectedIds = new Set([...input.pool.pinnedIds, ...input.pool.rejectedIds, ...(input.protectedIds ?? [])]);
   const retained = unique([
     ...fused.filter(({ entry }) => protectedIds.has(entry.candidateId)).map(({ entry }) => entry.candidateId),
     ...fused.map(({ entry }) => entry.candidateId),
   ]).slice(0, ADAPTIVE_POOL_MAX_CANDIDATES);
   const retainedSet = new Set(retained);
+  const retainedAddedIds = addedIds.filter((id) => retainedSet.has(id));
   const orderedCandidates = fused
     .filter(({ entry }) => retainedSet.has(entry.candidateId) && candidates.has(entry.candidateId))
     .map(({ entry }, index) => {
@@ -213,12 +235,12 @@ export function mergeAdaptiveCandidates(input: {
   return {
     candidates: orderedCandidates,
     pool: recordPoolTransition(mergedPool, {
-      decision: addedIds.length ? "FETCH_AND_MERGE" : "DEGRADED_KEEP",
-      reasons: [addedIds.length ? "new_verified_candidates_merged" : "no_new_verified_candidates"],
-      queryHash: input.plan.queryHash, family: input.plan.family, addedIds, qlooCalls: input.qlooCalls,
-      outcome: addedIds.length ? "merged" : "empty",
+      decision: retainedAddedIds.length ? "FETCH_AND_MERGE" : "DEGRADED_KEEP",
+      reasons: [retainedAddedIds.length ? "new_verified_candidates_merged" : "no_new_verified_candidates"],
+      queryHash: input.plan.queryHash, family: input.plan.family, addedIds: retainedAddedIds, qlooCalls: input.qlooCalls,
+      outcome: retainedAddedIds.length ? "merged" : "empty",
     }, input.round, input.at),
-    addedIds,
+    addedIds: retainedAddedIds,
   };
 }
 
@@ -226,7 +248,9 @@ export function recordAdaptiveAttempt(state: AdaptivePoolState, input: {
   decision: PoolDecision; reasons: string[]; round: number; at: number; plan?: QueryPlan;
   qlooCalls: number; outcome: "not_requested" | "merged" | "empty" | "failed" | "duplicate" | "budget_exhausted";
 }): AdaptivePoolState {
-  const attemptedQueryHashes = input.plan ? unique([...state.attemptedQueryHashes, input.plan.queryHash]) : state.attemptedQueryHashes;
+  // Refusing a plan is not an upstream attempt. Keep the hash set bounded by the
+  // cumulative call allowance, without ever forgetting a request that actually ran.
+  const attemptedQueryHashes = input.plan && input.qlooCalls > 0 ? unique([...state.attemptedQueryHashes, input.plan.queryHash]) : state.attemptedQueryHashes;
   return recordPoolTransition({ ...state, attemptedQueryHashes }, {
     decision: input.decision, reasons: input.reasons, queryHash: input.plan?.queryHash, family: input.plan?.family,
     qlooCalls: input.qlooCalls, outcome: input.outcome,

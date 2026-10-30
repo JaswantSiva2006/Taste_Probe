@@ -132,6 +132,10 @@ export function buildInsightsUrl(baseUrl: string, request: RecommendationRequest
   appendIds(url.searchParams, "filter.exclude.entities", request.excludedEntityIds);
   appendIds(url.searchParams, "filter.exclude.tags", request.excludedTagIds);
   url.searchParams.set("take", String(Math.min(MAX_TAKE, Math.max(1, Math.trunc(request.take)))));
+  if (request.page !== undefined) {
+    if (!Number.isInteger(request.page) || request.page < 2 || request.page > 6) throw new Error("invalid_insights_page");
+    url.searchParams.set("page", String(request.page));
+  }
   if (request.includeExplainability) url.searchParams.set("feature.explainability", "true");
   return url;
 }

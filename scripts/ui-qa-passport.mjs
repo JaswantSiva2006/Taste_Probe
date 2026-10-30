@@ -27,8 +27,10 @@ import { startQlooStub } from "./lib/qloo-stub.mjs";
 import { axeScan, hygiene, searchAndSelect, chooseSource } from "./lib/ui-flow.mjs";
 
 const require = createRequire(import.meta.url);
-const ADAPTIVE = process.argv.includes("--adaptive");
-const OUT = resolve(ADAPTIVE ? ".artifacts/s9-16/browser" : ".artifacts/passport");
+const RETAINED = process.argv.includes("--retained-live");
+const SUPPLY = process.argv.includes("--supply") || RETAINED;
+const ADAPTIVE = process.argv.includes("--adaptive") || SUPPLY;
+const OUT = resolve(RETAINED ? ".artifacts/s9-16r/browser-retained" : SUPPLY ? ".artifacts/s9-16r/browser" : ADAPTIVE ? ".artifacts/s9-16/browser" : ".artifacts/passport");
 const ONLY_CAPTURE = process.argv.includes("--capture");
 await mkdir(OUT, { recursive: true });
 
@@ -43,7 +45,7 @@ const freePort = () =>
     });
   });
 
-const stub = await startQlooStub();
+const stub = await startQlooStub({ extended: SUPPLY, retained: RETAINED });
 const port = await freePort();
 const child = spawn(process.execPath, [require.resolve("next/dist/bin/next"), "dev", "--port", String(port), "--hostname", "127.0.0.1"], {
   env: {
@@ -56,11 +58,12 @@ const child = spawn(process.execPath, [require.resolve("next/dist/bin/next"), "d
     NODE_TLS_REJECT_UNAUTHORIZED: "0",
     LLM_PROVIDER: "none",
     GOOGLE_API_KEY: "",
-    YOUTUBE_API_KEY: "",
-    SESSION_STORE: "memory",
+    ...(RETAINED ? { YOUTUBE_SEARCHES_PER_EXPLORATION: "0", YOUTUBE_DAILY_SEARCH_MAX: "0" } : { YOUTUBE_API_KEY: "" }),
+    SESSION_STORE: RETAINED ? "redis" : "memory",
     RATE_LIMIT_ENABLED: "false",
     ADAPTIVE_POOL_ENABLED: "false",
     ADAPTIVE_LISTENING_ENABLED: ADAPTIVE ? "true" : "false",
+    MAX_RECOMMENDATION_CANDIDATES: SUPPLY ? "50" : "8",
     NEXT_TELEMETRY_DISABLED: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -137,8 +140,8 @@ async function noProblems(page, label) {
 async function toStage(page) {
   await page.goto(base, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: /Start discovering/ }).first().click();
-  await chooseSource(page, "Movies");
-  await searchAndSelect(page, "Interstellar", "Interstellar");
+  await chooseSource(page, RETAINED ? "Artists" : "Movies");
+  await searchAndSelect(page, RETAINED ? "Dua Lipa" : "Interstellar", RETAINED ? "Dua Lipa" : "Interstellar");
   await page.getByRole("button", { name: /^Discover music from/ }).click();
   await page.waitForSelector("#tp-question, #tp-listen-title", { timeout: 60_000 });
   if (await page.locator("#tp-question").count()) await page.getByRole("button", { name: "Show my way in" }).click();
@@ -159,13 +162,16 @@ try {
     await click(page, "Save to Passport");
     check("adaptive Save preserves exact video", await page.evaluate((id) => JSON.parse(localStorage.getItem("tasteprobe.passport.v1") ?? "{}").items?.some((s) => s.video.videoId === id), first));
     const seen = new Set([first]);
-    for (let i = 0; i < 5; i++) {
+    const artists = new Set();
+    for (let i = 0; i < (SUPPLY ? 20 : 5); i++) {
       await click(page, "Not for me");
       const id = await videoId(page);
       check(`dislike ${i + 1} automatically presents a distinct recording without a dialog`, !!id && !seen.has(id) && (await page.locator(".sp-followup").count()) === 0);
       seen.add(id);
+      artists.add(await page.textContent(".sp-now__name"));
       check(`dislike ${i + 1} does not autoplay`, await waitPhase(page, "ready"));
     }
+    if (SUPPLY) check("long-horizon supply explores beyond two artists", artists.size > 2, { uniqueArtists: artists.size, uniqueVideos: seen.size });
     await noProblems(page, "adaptive stage");
     await shot(page, "adaptive-reactions", true);
     await click(page, "Finish listening");

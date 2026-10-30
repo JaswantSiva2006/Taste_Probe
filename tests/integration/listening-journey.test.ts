@@ -163,12 +163,28 @@ afterEach(() => {
 });
 
 describe("S9.16 flagged HTTP feedback path", () => {
+  it("a long mixed HTTP sequence uses every available verified video once, then reports real exhaustion", async () => {
+    vi.stubEnv("ADAPTIVE_LISTENING_ENABLED", "true");
+    let v = await ok(await listen(await explore()));
+    const seen = new Set<string>(), artists = new Set<string>(); const qloo = calls.qlooInsights;
+    for (let i = 0; i < 20 && v.listening?.video; i++) {
+      const current = v.listening.video;
+      expect(seen.has(current.videoId)).toBe(false); seen.add(current.videoId); artists.add(current.artistId);
+      const action = (["LOVE", "NOT_FOR_ME", "NEXT"] as const)[i % 3]!;
+      v = await ok(await act(v, action));
+      if (action === "LOVE") v = await ok(await act(v, "NEXT"));
+    }
+    expect(seen.size).toBe(10); expect(artists.size).toBe(5);
+    expect(v.listening!.video).toBeNull(); expect(v.listening!.notice).toBe("verified_inventory_exhausted");
+    expect(calls.qlooInsights).toBe(qloo); expect(calls.youtube).toBe(0);
+  });
   it.each([
     ["movie", INTERSTELLAR, "Interstellar"],
     ["music_artist", "0D8EAFA4-CEEA-44D5-8E1F-26A8A9F49A77", "Nils Frahm"],
     ["tv_show", "D03D0913-A7B9-4C46-BFEB-958C1B3FA387", "Breaking Bad"],
     ["video_game", "FC14952D-5C27-48D8-908A-044ABD07FEAF", "Celeste"],
     ["podcast", "B4D6B6FD-7146-4E1C-AE48-B8EBD2BB71DA", "Radiolab"],
+    ["music_artist", "1D792A35-7D72-4D57-88D0-C3A4F3E73EF6", "Dua Lipa"],
   ] as [EntityType, string, string][])("%s automatically advances and rejects duplicate/concurrent feedback", async (domain, id, name) => {
     sourceFixture = { id, name, domain };
     vi.stubEnv("ADAPTIVE_LISTENING_ENABLED", "true");

@@ -85,11 +85,15 @@ export function nextArtistIds(orderedIds: string[], state: ListeningState, exclu
 }
 
 export function recordEncounter(state: ListeningState, input: { artistId: string; artistName: string; option: VerifiedSongOption; selection: SongSelection; at: number; revision: number }): ListeningState {
+  const exposure = new Map((state.artistExposure ?? []).map((e) => [e.artistId, e.count]));
+  if (!state.artistExposure) for (const e of state.encounters) exposure.set(e.artistId, (exposure.get(e.artistId) ?? 0) + 1);
+  exposure.set(input.artistId, (exposure.get(input.artistId) ?? 0) + 1);
   return {
     ...state,
     currentArtistId: input.artistId,
     currentVideoId: input.option.videoId,
     selection: input.selection,
+    artistExposure: [...exposure].map(([artistId, count]) => ({ artistId, count })).slice(0, 600),
     seenRecordingIds: [...new Set([...seenVideoIds(state), input.option.videoId])].slice(0, 600),
     visitedArtistIds: state.visitedArtistIds.includes(input.artistId) ? state.visitedArtistIds : cap([...state.visitedArtistIds, input.artistId], 100),
     encounters: cap([...state.encounters, { artistId: input.artistId, artistName: input.artistName, videoId: input.option.videoId, title: input.option.title, at: input.at, revision: input.revision, selection: input.selection.mode }], 100),
@@ -97,7 +101,7 @@ export function recordEncounter(state: ListeningState, input: { artistId: string
 }
 
 export function withTrackFeedback(state: ListeningState, entry: ListeningState["trackFeedback"][number]): ListeningState {
-  return { ...state, trackFeedback: cap([...state.trackFeedback, entry], 100) };
+  return { ...state, trackFeedback: [...state.trackFeedback.filter((f) => f.videoId !== entry.videoId), entry].slice(-600) };
 }
 
 export function withArtistFeedback(state: ListeningState, entry: ListeningState["artistFeedback"][number]): ListeningState {

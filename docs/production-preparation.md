@@ -57,6 +57,8 @@ Features/observability: `ADAPTIVE_POOL_ENABLED`, `ADAPTIVE_LISTENING_ENABLED`, `
 
 `ADAPTIVE_LISTENING_ENABLED` is optional and defaults to `false`. S9.16's experimental path can spend a bounded Gemini request after meaningful reactions; it does not activate multimodal analysis. Review `adaptive-listening-intelligence.md` and its PARTIAL quality status before enabling. Roll back by setting it false; Passport data is unaffected.
 
+S9.16R's [supply repair](discovery-supply-intelligence.md) verifies `MAX_RECOMMENDATION_CANDIDATES=50` against the active provider and supports bounded batch YouTube lookup and source-preserving page/exclusion refresh. Review the host's actual override: the prior local value was eight. Qloo/YouTube/Gemini call allowances are unchanged. Controlled preview promotion must explicitly choose the adaptive flags; no extra runtime secret or service is required.
+
 Recommended explicit settings: `SESSION_STORE=redis`, `LLM_PROVIDER=google`, `QLOO_BASE_URL=https://hackathon.api.qloo.com`, `RATE_LIMIT_ENABLED=true`. Leave budget defaults unchanged. `ADAPTIVE_POOL_ENABLED` defaults to `false`: explicitly choose `true` only if deploying the adaptive controller with accepted quota/testing scope. Its enabled path can spend Qloo calls, including artist-level feedback. Do not turn it on merely to obtain a green demo.
 
 `YOUTUBE_API_KEY` is optional: without it only reviewed recordings resolve. Use a dedicated YouTube Data API credential, never the Gemini key. Configure restrictions for this server-side API usage in the provider console; a browser-referrer-only key is inappropriate for backend requests. This pass did not inspect account-console restrictions.

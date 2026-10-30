@@ -24,6 +24,8 @@ For live use, configure server-side Qloo, Gemini and session credentials. Produc
 
 S9.16's experimental cross-artist listening loop is gated by `ADAPTIVE_LISTENING_ENABLED=false` by default. Its verified scope, evidence limits and rollback are documented in [adaptive listening intelligence](docs/adaptive-listening-intelligence.md). Run `smoke:adaptive-listening`, `evaluate:adaptive-listening` and `qa:adaptive-listening` for its dedicated gates. Direct YouTube multimodal enrichment is disabled; no audio-understanding claim is made.
 
+S9.16R adds a playable-supply controller, verified multi-artist YouTube lookup, bounded source-preserving Qloo expansion and recent-exposure ranking. The candidate default is 50 (the previous local override was eight); provider-call quotas remain unchanged. See [discovery supply intelligence](docs/discovery-supply-intelligence.md) and run `smoke:discovery-supply`, `evaluate:discovery-supply`, and `qa:discovery-supply`. The adaptive flags remain off by default.
+
 ```sh
 npm run lint
 npm run typecheck

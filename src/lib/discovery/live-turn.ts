@@ -163,13 +163,13 @@ export async function retrieve(
   ledger.qlooBudgetCalls += Math.max(1, result.requestCount);
   ledger.correlationIds.push(result.requestId);
   ledger.retrieved = true;
-  const { candidates, rejected } = normalizeTargetCandidates(result, session.anchorIds, deps.config.limits.maxRecommendationCandidates, {
+  const { candidates, rejected, acquisition } = normalizeTargetCandidates(result, session.anchorIds, deps.config.limits.maxRecommendationCandidates, {
     targetType: session.targetType,
     provenance: deps.config.mode === "live" ? "qloo" : "mock",
   });
   ledger.normalizationRejected += rejected;
   if (!candidates.length) return null;
-  return { ...state, candidates };
+  return { ...state, candidates, acquisition };
 }
 
 export type AdaptiveRetrievalResult = {
@@ -187,7 +187,7 @@ export async function retrieveAdaptive(
   deps: LiveDeps,
   state: SessionState,
   ledger: LiveLedger,
-  delta: { positiveTagIds: string[]; positiveEntityIds: string[] },
+  delta: { positiveTagIds: string[]; positiveEntityIds: string[]; playableCandidateIds?: string[]; exhaustedArtistIds?: string[] },
 ): Promise<AdaptiveRetrievalResult> {
   if (!state.adaptivePool) return { state, decision: "KEEP", reasons: ["adaptive_pool_absent"], plan: null, addedIds: [], calls: 0, outcome: "not_requested" };
   const planned = planAdaptiveRetrieval({
@@ -195,6 +195,8 @@ export async function retrieveAdaptive(
     targetType: state.session.targetType, newPositiveEntityIds: delta.positiveEntityIds,
     newPositiveTagIds: delta.positiveTagIds, take: deps.config.limits.maxRecommendationCandidates,
     includeExplainability: deps.config.mode === "live",
+    playableCandidateIds: delta.playableCandidateIds,
+    ...(delta.exhaustedArtistIds ? { supplyExpansion: { verified: new URL(deps.config.qloo.baseUrl ?? "https://hackathon.api.qloo.com").hostname === "hackathon.api.qloo.com" || deps.config.mode === "mock", exhaustedArtistIds: delta.exhaustedArtistIds } } : {}),
   });
   if (!planned.plan) {
     const duplicate = planned.reasons.includes("query_already_attempted");
@@ -216,15 +218,19 @@ export async function retrieveAdaptive(
       addedIds: [], calls: 0, outcome: "budget_exhausted",
     };
   }
+  let requestAccounted = false;
   try {
     const result = await deps.provider.getRecommendations({
       seedEntityIds: planned.plan.seedEntityIds, targetType: state.session.targetType,
       take: planned.plan.take, positiveEntityIds: planned.plan.positiveEntityIds,
       positiveTagIds: planned.plan.positiveTagIds, includeExplainability: planned.plan.includeExplainability,
+      excludedEntityIds: planned.plan.excludedCandidateIds,
+      ...(planned.plan.family === "PAGINATE" ? { page: Number(planned.plan.cursor!.slice(5)) } : {}),
       maxAttempts: 1,
     });
     const calls = Math.max(1, result.requestCount);
     ledger.qlooBudgetCalls += calls;
+    requestAccounted = true;
     ledger.correlationIds.push(result.requestId);
     ledger.retrieved = true;
     const normalized = normalizeTargetCandidates(result, state.session.anchorIds, planned.plan.take, {
@@ -233,15 +239,16 @@ export async function retrieveAdaptive(
     ledger.normalizationRejected += normalized.rejected;
     const merged = mergeAdaptiveCandidates({
       current: state.candidates, incoming: normalized.candidates, pool: state.adaptivePool,
+      protectedIds: [...(state.listening?.currentArtistId ? [state.listening.currentArtistId] : []), ...(state.listening?.saved.map((s) => s.artist.qlooId) ?? [])],
       plan: planned.plan, requestId: result.requestId, round: state.session.round ?? 1, at: deps.now(), qlooCalls: calls,
     });
     return {
-      state: { ...state, candidates: merged.candidates, adaptivePool: merged.pool },
+      state: { ...state, candidates: merged.candidates, adaptivePool: merged.pool, acquisition: normalized.acquisition },
       decision: merged.addedIds.length ? "FETCH_AND_MERGE" : "DEGRADED_KEEP", reasons: [merged.addedIds.length ? "new_verified_candidates_merged" : "no_new_verified_candidates"],
       plan: planned.plan, addedIds: merged.addedIds, calls, outcome: merged.addedIds.length ? "merged" : "empty",
     };
   } catch (error) {
-    ledger.qlooBudgetCalls += 1;
+    if (!requestAccounted) ledger.qlooBudgetCalls += 1;
     ledger.degraded = error instanceof AppError ? `qloo_${error.code.toLowerCase()}` : "qloo_error";
     return {
       state: { ...state, adaptivePool: recordAdaptiveAttempt(state.adaptivePool, {

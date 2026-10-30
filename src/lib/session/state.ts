@@ -29,6 +29,7 @@ export const SessionStateSchema = z.object({
   /** S9.12 optional listening loop; absent until the user starts listening. */
   listening: ListeningStateSchema.optional(),
   taste: TasteStateSchema.optional(),
+  acquisition: z.object({ returned: z.number(), normalized: z.number(), rejections: z.array(z.object({ entityId: z.string(), reason: z.string() })).max(100) }).optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 

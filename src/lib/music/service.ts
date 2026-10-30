@@ -19,6 +19,7 @@ export type MusicDeps = { dynamic?: DynamicLookup; now?: () => Date };
 const INFLIGHT = new Map<string, Promise<DynamicOutcome>>();
 export function deduplicated(lookup: DynamicLookup): DynamicLookup {
   return {
+    ...(lookup.lookupBatch ? { lookupBatch: lookup.lookupBatch.bind(lookup) } : {}),
     lookup(artist, explorationId) {
       const key = `${explorationId}:${artist.entityId}`;
       const running = INFLIGHT.get(key);

@@ -87,6 +87,28 @@ export const lookupCacheKey = (artistId: string) => `tp:yt:artist:${RESOLVER_POL
 /** Wraps a lookup with the per-artist cache (outermost: a hit never touches quota). */
 export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicLookup {
   return {
+    ...(inner.lookupBatch ? { async lookupBatch(artists, explorationId) {
+      const out: Record<string, DynamicOutcome | null> = {};
+      const missing = [];
+      for (const artist of artists.slice(0, 6)) {
+        const hit = await cache.get(lookupCacheKey(artist.entityId));
+        if (hit && normalizeName(hit.artistName) === normalizeName(artist.name)) out[artist.entityId] = { ...hit.outcome, cached: true };
+        else missing.push(artist);
+      }
+      if (missing.length) {
+        const found = await inner.lookupBatch!(missing, explorationId);
+        for (const artist of missing) {
+          const result = found[artist.entityId] ?? null; out[artist.entityId] = result;
+          // Incomplete OR-query coverage must NEVER poison a single-artist negative cache.
+          if (result?.kind === "resolved") await cache.set(lookupCacheKey(artist.entityId), { artistName: artist.name, outcome: result }, RESOLVED_TTL_MS);
+        }
+      }
+      return out;
+    } } : {}),
+    async peek(artist) {
+      const hit = await cache.get(lookupCacheKey(artist.entityId));
+      return hit && normalizeName(hit.artistName) === normalizeName(artist.name) ? { ...hit.outcome, cached: true } : null;
+    },
     async lookup(artist, explorationId) {
       const hit = await cache.get(lookupCacheKey(artist.entityId));
       if (hit && normalizeName(hit.artistName) === normalizeName(artist.name)) return { ...hit.outcome, cached: true };
