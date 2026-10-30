@@ -42,11 +42,16 @@ const toOption = (artistId: string, v: ResolvedVideo): VerifiedSongOption => ({
 
 /** Verified options for one artist: only a RESOLVED result, primary first, deduplicated, bounded. */
 export function optionsFrom(resolution: MusicResolution): VerifiedSongOption[] {
+  return boundedOptionsFrom(resolution, MAX_OPTIONS_PER_ARTIST);
+}
+
+/** S9.17: the same, with an explicit bound (inventory may hold more than the six shown per artist). */
+export function boundedOptionsFrom(resolution: MusicResolution, limit: number): VerifiedSongOption[] {
   if (resolution.status !== "RESOLVED" || !resolution.video) return [];
   const seen = new Set<string>();
   return [resolution.video, ...resolution.alternates]
     .filter((v) => !seen.has(v.videoId) && seen.add(v.videoId))
-    .slice(0, MAX_OPTIONS_PER_ARTIST)
+    .slice(0, limit)
     .map((v) => toOption(resolution.artist.entityId, v));
 }
 
@@ -106,6 +111,11 @@ export function withTrackFeedback(state: ListeningState, entry: ListeningState["
 
 export function withArtistFeedback(state: ListeningState, entry: ListeningState["artistFeedback"][number]): ListeningState {
   return { ...state, artistFeedback: cap([...state.artistFeedback, entry], 100) };
+}
+
+/** S9.17: one engagement observation per action; a later observation of the same recording replaces it. */
+export function withEngagement(state: ListeningState, entry: NonNullable<ListeningState["engagement"]>[number]): ListeningState {
+  return { ...state, engagement: [...(state.engagement ?? []).filter((e) => e.videoId !== entry.videoId), entry].slice(-600) };
 }
 
 export function withNavigation(state: ListeningState, entry: ListeningState["navigation"][number]): ListeningState {

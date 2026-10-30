@@ -56,13 +56,74 @@ export function tasteOf(state: SessionState, l: ListeningState): TasteState {
   };
 }
 
+/**
+ * S9.17 implicit listening signal for a navigation action (NEXT, ANOTHER_SONG,
+ * DIFFERENT_ARTIST): how much of the recording (or of its preview) actually played.
+ * Zero seconds means the listener never pressed play: no evidence either way.
+ * Thresholds are heuristics, not calibrated probabilities.
+ */
+export function implicitWeight(e: { action: string; listenedSeconds: number; durationSeconds: number | null; mode?: "preview" | "full" }, previewSeconds?: number): number {
+  if (!["NEXT", "ANOTHER_SONG", "DIFFERENT_ARTIST"].includes(e.action) || e.listenedSeconds <= 0) return 0;
+  const span = e.mode === "preview" && previewSeconds ? previewSeconds : Math.min(e.durationSeconds ?? 210, 300);
+  const ratio = Math.min(1, e.listenedSeconds / span);
+  if (e.listenedSeconds < 12) return -0.5; // skipped within seconds
+  if (ratio < 0.25) return -0.25;
+  if (ratio >= 0.8) return 0.6; // stayed for (nearly) all of it
+  if (ratio >= 0.5) return 0.3;
+  return 0;
+}
+
+export type TrackSignal = { artistId: string; videoId: string; weight: number; strength: "strong" | "weak"; source: "love" | "not_for_me" | "saved" | "listening" };
+
+/** Per recording: explicit reactions and saves win; otherwise the latest listening observation. */
+export function trackSignals(l: ListeningState): Map<string, TrackSignal> {
+  const out = new Map<string, TrackSignal>();
+  for (const e of l.engagement ?? []) {
+    const weight = implicitWeight(e, e.mode === "preview" ? 30 : undefined);
+    if (weight) out.set(e.videoId, { artistId: e.artistId, videoId: e.videoId, weight, strength: "weak", source: "listening" });
+  }
+  for (const s of l.saved) out.set(s.video.videoId, { artistId: s.artist.qlooId, videoId: s.video.videoId, weight: 1, strength: "strong", source: "saved" });
+  const reactions = trackReactions(l);
+  for (const f of l.trackFeedback) {
+    const latest = reactions.get(f.videoId);
+    if (latest !== f.action) continue;
+    out.set(f.videoId, { artistId: f.artistId, videoId: f.videoId, weight: f.action === "love" ? 1 : -1, strength: "strong", source: f.action });
+  }
+  return out;
+}
+
+/** Same-artist evidence in [-1, 1], shrunk toward 0 when there is little of it. */
+export function artistSignals(l: ListeningState): Map<string, { score: number; strong: boolean; count: number }> {
+  const sums = new Map<string, { total: number; count: number; strong: boolean }>();
+  for (const s of trackSignals(l).values()) {
+    const a = sums.get(s.artistId) ?? { total: 0, count: 0, strong: false };
+    sums.set(s.artistId, { total: a.total + s.weight, count: a.count + 1, strong: a.strong || s.strength === "strong" });
+  }
+  for (const f of l.artistFeedback) {
+    if (f.action !== "like_artist") continue;
+    const a = sums.get(f.artistId) ?? { total: 0, count: 0, strong: true };
+    sums.set(f.artistId, { total: a.total + 3, count: a.count + 1, strong: true });
+  }
+  // Shrunk toward 0: one track reaction nudges its artist; an explicit artist decision moves it decisively.
+  return new Map([...sums].map(([id, a]) => [id, { score: Math.max(-1, Math.min(1, a.total / (a.count + 2))), strong: a.strong, count: a.count }]));
+}
+
+/** Model-assisted artist affinity (S9.17): favoured rank → bonus, disfavoured → penalty; only for the evidence it was computed on. */
+export function modelAffinity(l: ListeningState, artistId: string): number {
+  const a = l.artistAffinity;
+  if (!a) return 0;
+  const i = a.favoured.indexOf(artistId);
+  if (i >= 0) return 1 - i / 10;
+  return a.disfavoured.includes(artistId) ? -0.8 : 0;
+}
+
 const overlap = (a: string[], b: string[]) => {
   if (!a.length || !b.length) return 0;
   const bs = new Set(b);
   return a.filter((id) => bs.has(id)).length / Math.sqrt(a.length * b.length);
 };
 
-export type ContextRank = { option: VerifiedSongOption; score: number; baseScore: number; diversityPenalty: number; anchor: number; answer: number; transfer: number; novelty: number; evidenceRefs: string[] };
+export type ContextRank = { option: VerifiedSongOption; score: number; baseScore: number; diversityPenalty: number; anchor: number; answer: number; transfer: number; novelty: number; affinity: number; model: number; evidenceRefs: string[] };
 
 /** Rank within the authorized candidate reservoir; raw affinities from different queries are never mixed. */
 export function rankRecordings(state: SessionState, l: ListeningState, inventory: VerifiedSongOption[], evidence: MusicEvidence[] = [], now = Date.now()): ContextRank[] {
@@ -77,9 +138,12 @@ export function rankRecordings(state: SessionState, l: ListeningState, inventory
   const exposure = new Map<string, number>();
   if (l.artistExposure) for (const e of l.artistExposure) exposure.set(e.artistId, e.count);
   else for (const e of l.encounters) exposure.set(e.artistId, (exposure.get(e.artistId) ?? 0) + 1);
-  const liked = taste.explicitTrackLoves.map((v) => candidates.get(l.trackFeedback.find((e) => e.videoId === v)?.artistId ?? "")).filter((c): c is RecommendationCandidate => !!c);
-  const disliked = taste.explicitTrackDislikes.map((v) => candidates.get(l.trackFeedback.find((e) => e.videoId === v)?.artistId ?? "")).filter((c): c is RecommendationCandidate => !!c);
-  const feedbackWeight = Math.min(0.3, (liked.length + disliked.length) * 0.05);
+  // Explicit reactions, saves and listening time, each weighted (S9.17).
+  const signals = [...trackSignals(l).values()];
+  const weighted = (sign: 1 | -1) => signals.filter((s) => Math.sign(s.weight) === sign).flatMap((s) => { const c = candidates.get(s.artistId); return c ? [{ c, w: Math.abs(s.weight) }] : []; });
+  const liked = weighted(1), disliked = weighted(-1);
+  const byArtist = artistSignals(l);
+  const feedbackWeight = Math.min(0.3, (liked.reduce((n, x) => n + x.w, 0) + disliked.reduce((n, x) => n + x.w, 0)) * 0.05);
   const unique = new Set<string>();
   return inventory.flatMap((option): ContextRank[] => {
     const c = candidates.get(option.artistId);
@@ -88,7 +152,7 @@ export function rankRecordings(state: SessionState, l: ListeningState, inventory
     const tags = c.tags.map((t) => t.id);
     const anchor = c.evidence.seedEntityIds.includes(state.seed.entityId) ? 1 / (1 + (anchorRank.get(c.entityId) ?? 999) / 5) : 0;
     const answer = Math.max(-1, Math.min(1, overlap(tags, state.session.positiveTagIds) - overlap(tags, state.session.rejectedTagIds) + (state.session.positiveEntityIds.includes(c.entityId) ? 1 : 0)));
-    const mean = (cs: RecommendationCandidate[]) => cs.length ? cs.reduce((sum, x) => sum + overlap(tags, x.tags.map((t) => t.id)), 0) / cs.length : 0;
+    const mean = (cs: Array<{ c: RecommendationCandidate; w: number }>) => { const total = cs.reduce((n, x) => n + x.w, 0); return total ? cs.reduce((sum, x) => sum + x.w * overlap(tags, x.c.tags.map((t) => t.id)), 0) / total : 0; };
     const transfer = mean(liked) - mean(disliked);
     const novelty = 1 / (1 + (exposure.get(c.entityId) ?? 0));
     // Only independently sourced track annotations may support track-level feature transfer.
@@ -102,17 +166,20 @@ export function rankRecordings(state: SessionState, l: ListeningState, inventory
         }
       }
     }
-    const baseScore = (0.5 - feedbackWeight / 2) * anchor + 0.35 * answer + feedbackWeight * transfer + 0.18 * novelty + 0.2 * musical;
+    // Direct same-artist evidence works even when Qloo returns no tags; model affinity adds general artist knowledge.
+    const affinity = byArtist.get(c.entityId)?.score ?? 0;
+    const model = modelAffinity(l, c.entityId);
+    const baseScore = (0.5 - feedbackWeight / 2) * anchor + 0.35 * answer + feedbackWeight * transfer + 0.18 * novelty + 0.2 * musical + 0.16 * affinity + 0.25 * model;
     const recent = l.encounters.slice(-8);
     const share = recent.length ? recent.filter((e) => e.artistId === c.entityId).length / recent.length : 0;
     let consecutive = 0;
     for (const e of [...recent].reverse()) { if (e.artistId !== c.entityId) break; consecutive++; }
-    const reactions = l.trackFeedback.filter((f) => f.artistId === c.entityId);
-    const negativePressure = reactions.filter((f) => f.action === "not_for_me").length / (1 + reactions.length);
+    const reactions = signals.filter((s) => s.artistId === c.entityId);
+    const negativePressure = reactions.reduce((n, s) => n + (s.weight < 0 ? -s.weight : 0), 0) / (1 + reactions.length);
     const recentSimilarity = recent.length ? recent.reduce((sum, e) => sum + overlap(tags, candidates.get(e.artistId)?.tags.map((t) => t.id) ?? []), 0) / recent.length : 0;
     // Contextual MMR-style soft redundancy, never a hard artist rotation or tag exclusion.
     const diversityPenalty = 0.24 * share + 0.08 * Math.min(1, consecutive / 3) + 0.18 * negativePressure + 0.06 * recentSimilarity;
     const score = baseScore - diversityPenalty;
-    return [{ option, score, baseScore, diversityPenalty, anchor, answer, transfer, novelty, evidenceRefs: [...new Set([`artist:${c.entityId}`, ...taste.explicitAnswers.map((a) => `answer:${a.questionId}`), ...taste.featureEvidence.filter((f) => tags.includes(f.id)).flatMap((f) => f.references), ...(profile ? [profile.sourceRef] : [])])] }];
+    return [{ option, score, baseScore, diversityPenalty, anchor, answer, transfer, novelty, affinity, model, evidenceRefs: [...new Set([`artist:${c.entityId}`, ...reactions.map((s) => `${s.source}:${s.videoId}`), ...(model ? [`model_affinity:${c.entityId}`] : []), ...taste.explicitAnswers.map((a) => `answer:${a.questionId}`), ...taste.featureEvidence.filter((f) => tags.includes(f.id)).flatMap((f) => f.references), ...(profile ? [profile.sourceRef] : [])])] }];
   }).sort((a, b) => b.score - a.score || a.option.videoId.localeCompare(b.option.videoId));
 }

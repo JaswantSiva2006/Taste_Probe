@@ -21,7 +21,7 @@ export const ResolvedVideoSchema = z.object({
   watchUrl: YouTubeUrl("https://www.youtube.com/watch?v="),
   /** How the artist/video match was established. */
   provenance: z.enum(["reviewed_mapping", "youtube_data_api"]),
-  channelKind: z.enum(["topic", "vevo", "label", "artist_self_described"]),
+  channelKind: z.enum(["topic", "vevo", "label", "artist_self_described", "credited_upload"]),
   verifiedAt: z.string(),
   durationSeconds: z.number().positive().optional(),
 });

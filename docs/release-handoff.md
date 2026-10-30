@@ -1,5 +1,28 @@
 # Release handoff
 
+## S9.17 verified supply + adaptive listening
+
+See [listening-intelligence.md](listening-intelligence.md).
+
+**YouTube identity:** the resolver now also accepts:
+- the artist's own channel;
+- label uploads that credit the artist by full name in the title or a description credit line.
+
+The same song filters apply to both (Music category, 60 s–15 min, no covers, edits, shorts or clips).
+
+**Supply and learning:**
+- One search also harvests recordings for other reservoir artists.
+- Crowded-out artists get a focused search, and lookups follow artist priority.
+- Listening time, saves and reactions feed ranking.
+- A bounded Gemini artist-affinity mode (same allowance) orders authorized candidates.
+
+**New defaults:**
+- `ADAPTIVE_LISTENING_ENABLED=true`
+- `YOUTUBE_SEARCHES_PER_EXPLORATION=6`
+- `YOUTUBE_DAILY_SEARCH_MAX=80`
+
+Explicit host or `.env` values still override them. Review those values before promotion.
+
 ## S9.16R controlled release candidate
 
 Branch `seg/S9-16R-discovery-intelligence`, based on `024d305`. See [the complete supply repair report](discovery-supply-intelligence.md). No push, merge or deployment has been performed. Public main was observed at `e9167c4`; public health is live/Redis-ready, but the deployed SHA and production flags were not exposed.

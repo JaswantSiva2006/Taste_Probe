@@ -4,7 +4,7 @@ import { REVIEWED_MAPPINGS, reviewedMappingFor } from "@/lib/music/mappings";
 import { resolveArtistVideo, selectMoment, type ResolveOptions } from "@/lib/music/resolver";
 import { deduplicated } from "@/lib/music/service";
 import { QLOO_ENTITY_ID, YOUTUBE_VIDEO_ID, momentWithinBounds, searchUrl, watchUrl, type ReviewedMapping } from "@/lib/music/types";
-import { createQuotaGuard, createYouTubeDataLookup, parseIsoDuration, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
+import { createQuotaGuard, createYouTubeDataLookup, creditsArtist, matchRecording, nameKey, parseIsoDuration, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
 import { createMemoryRateLimitStore } from "@/lib/reliability/rate-limit";
 import { NEGATIVE_TTL_MS, RESOLVED_TTL_MS, RESOLVER_POLICY_VERSION, cachedLookup, createMemoryLookupCache, createRedisLookupCache, lookupCacheKey } from "@/lib/music/cache";
 
@@ -159,11 +159,11 @@ const jsonRes = (body: unknown, status = 200) => new Response(JSON.stringify(bod
 const search = (items: Array<{ id: string; channel: string; channelId?: string }>) => ({
   items: items.map((i) => ({ id: { videoId: i.id }, snippet: { channelTitle: i.channel, channelId: i.channelId ?? "C1" } })),
 });
-const videos = (items: Array<{ id: string; channel: string; embeddable?: boolean; title?: string }>) => ({
+const videos = (items: Array<{ id: string; channel: string; embeddable?: boolean; title?: string; channelId?: string; description?: string; duration?: string }>) => ({
   items: items.map((i) => ({
     id: i.id,
-    snippet: { title: i.title ?? "Song", channelTitle: i.channel, channelId: "C1" },
-    contentDetails: { duration: "PT4M5S" },
+    snippet: { title: i.title ?? "Song", channelTitle: i.channel, channelId: i.channelId ?? "C1", ...(i.description ? { description: i.description } : {}) },
+    contentDetails: { duration: i.duration ?? "PT4M5S" },
     status: { embeddable: i.embeddable ?? true, privacyStatus: "public" },
   })),
 });
@@ -231,10 +231,10 @@ describe("optional YouTube Data API tier", () => {
     expect(calls[0]!.url).toContain("videoEmbeddable=true");
   });
 
-  it("'Official' in a title is not identity: no Topic channel → NEEDS_REVIEW", async () => {
-    const { fetcher } = fakeFetch(jsonRes(search([{ id: "AAAAAAAAAAA", channel: "MusicHub" }])));
+  it("'Official' in a title is not identity: an uncredited upload → NEEDS_REVIEW", async () => {
+    const { fetcher } = fakeFetch(jsonRes(search([{ id: "AAAAAAAAAAA", channel: "MusicHub" }])), jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "MusicHub", title: "Official Song" }])));
     const dynamic = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher });
-    expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_topic_channel_match", video: null });
+    expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_verified_match", video: null });
   });
 
   it("exposes multiple recordings only from the searched verified channel and video IDs", async () => {
@@ -262,7 +262,7 @@ describe("optional YouTube Data API tier", () => {
   });
 
   it("rejects lookalike VEVO channels and non-corroborating or impersonation metadata", async () => {
-    const lookalike = fakeFetch(jsonRes(search([{ id: "AAAAAAAAAAA", channel: "NewArtistVEVOOfficial" }])));
+    const lookalike = fakeFetch(jsonRes(search([{ id: "AAAAAAAAAAA", channel: "NewArtistVEVOOfficial" }])), jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "NewArtistVEVOOfficial" }])));
     expect(await resolveArtistVideo(unknown, opts({ dynamic: createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: lookalike.fetcher }) }))).toMatchObject({ status: "NEEDS_REVIEW" });
 
     for (const title of ["Another Artist - Song", "New Artist cover by Someone"] as const) {
@@ -270,13 +270,14 @@ describe("optional YouTube Data API tier", () => {
         jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist VEVO" }])),
         jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist VEVO", title }])),
       );
-      expect(await resolveArtistVideo(unknown, opts({ dynamic: createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: attempt.fetcher }) }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_embeddable_public_match" });
+      expect(await resolveArtistVideo(unknown, opts({ dynamic: createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: attempt.fetcher }) }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_verified_match" });
     }
   });
 
   it("two Topic channels for one name are ambiguous", async () => {
     const { fetcher } = fakeFetch(
       jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic", channelId: "C1" }, { id: "BBBBBBBBBBB", channel: "New Artist - Topic", channelId: "C2" }])),
+      jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic", channelId: "C1" }, { id: "BBBBBBBBBBB", channel: "New Artist - Topic", channelId: "C2" }])),
     );
     const dynamic = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher });
     expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "multiple_topic_channels" });
@@ -288,7 +289,7 @@ describe("optional YouTube Data API tier", () => {
       jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic", embeddable: false }])),
     );
     const dynamic = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher });
-    expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_embeddable_public_match" });
+    expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_verified_match" });
   });
 
   it("empty search → UNAVAILABLE; 403 quota → RATE_LIMITED; network error → UPSTREAM_FAILURE (no retry)", async () => {
@@ -343,6 +344,59 @@ describe("optional YouTube Data API tier", () => {
     const x = { entityId: "X", name: "X" };
     await Promise.all([d.lookup(x, "e"), d.lookup(x, "e"), d.lookup(x, "e")]);
     expect(calls).toBe(1);
+  });
+
+  it("S9.17: accepts the artist's own channel and label uploads that credit the artist by full name", async () => {
+    const { fetcher } = fakeFetch(
+      jsonRes(search([
+        { id: "AAAAAAAAAAA", channel: "Big Label Records", channelId: "L1" },
+        { id: "BBBBBBBBBBB", channel: "New Artist", channelId: "A1" },
+        { id: "CCCCCCCCCCC", channel: "Big Label Records", channelId: "L1" },
+        { id: "DDDDDDDDDDD", channel: "Fan Edits", channelId: "F1" },
+        { id: "EEEEEEEEEEE", channel: "Big Label Records", channelId: "L1" },
+      ])),
+      jsonRes(videos([
+        { id: "AAAAAAAAAAA", channel: "Big Label Records", channelId: "L1", title: "Northern Lights | Film Name | New Artist" },
+        { id: "BBBBBBBBBBB", channel: "New Artist", channelId: "A1", title: "Southern Skies (Official Video)" },
+        { id: "CCCCCCCCCCC", channel: "Big Label Records", channelId: "L1", title: "Eastern Sea - Lyrical", description: "Song credits\nMusic: New Artist\nLyrics: Someone Else" },
+        { id: "DDDDDDDDDDD", channel: "Fan Edits", channelId: "F1", title: "Northern Lights | New Artist | Slowed + Reverb" },
+        { id: "EEEEEEEEEEE", channel: "Big Label Records", channelId: "L1", title: "New Artistry Live Jam" },
+      ])),
+    );
+    const dynamic = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher, now: () => NOW });
+    const r = parse(await resolveArtistVideo(unknown, opts({ dynamic })));
+    expect(r.status).toBe("RESOLVED");
+    // Strongest tier first: own channel, then title credit, then description credit.
+    expect([r.video!.videoId, ...r.alternates.map((v) => v.videoId)]).toEqual(["BBBBBBBBBBB", "AAAAAAAAAAA", "CCCCCCCCCCC"]);
+    expect(r.video!.channelKind).toBe("artist_self_described");
+    expect(r.alternates.map((v) => v.channelKind)).toEqual(["credited_upload", "credited_upload"]);
+  });
+
+  it("S9.17: a name that only begins a longer name, hashtags, shorts and non-songs are never credits", () => {
+    const song = { channelTitle: "Any Channel", durationSeconds: 200 };
+    expect(matchRecording({ ...song, title: "Pritam Bhartwan New Song" }, "Pritam")).toBeNull();
+    expect(matchRecording({ ...song, title: "Show clip #newartist #tv" }, "New Artist")).toBeNull();
+    expect(matchRecording({ ...song, title: "Track | New Artist", durationSeconds: 30 }, "New Artist")).toBeNull();
+    expect(matchRecording({ ...song, title: "Track | New Artist | Karaoke" }, "New Artist")).toBeNull();
+    expect(matchRecording({ ...song, title: "Track | New Artist | Audio Jukebox" }, "New Artist")).toBeNull();
+    expect(matchRecording({ ...song, title: "Track (feat. A. B. Singer)" }, "AB Singer")).toBe("credited_title");
+    expect(matchRecording({ ...song, title: "Track | Sky", }, "Sky")).toBeNull(); // too short to credit by text
+    expect(creditsArtist("Song - Music by New Artist", "New Artist")).toBe(true);
+    expect(nameKey("A.R. Example")).toBe(nameKey("AR Example"));
+  });
+
+  it("S9.17: one batch query also harvests verified recordings for other authorized reservoir artists", async () => {
+    const { fetcher } = fakeFetch(
+      jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "Label", channelId: "L1" }])),
+      jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "Label", channelId: "L1", title: "Duet | New Artist, Other Person" }])),
+    );
+    const resolver = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher });
+    const other = { entityId: "33333333-3333-4333-8333-333333333333", name: "Other Person" };
+    const absent = { entityId: "44444444-4444-4444-8444-444444444444", name: "Absent Artist" };
+    const out = await resolver.lookupBatch!([unknown], "fixture", [other, absent]);
+    expect(out[unknown.entityId]).toMatchObject({ kind: "resolved" });
+    expect(out[other.entityId]).toMatchObject({ kind: "resolved", video: { videoId: "BBBBBBBBBBB", channelKind: "credited_upload" } });
+    expect(out[absent.entityId]).toBeUndefined(); // harvest is positive-only, never a negative
   });
 
   it("parses ISO durations", () => {
@@ -406,8 +460,20 @@ describe("per-artist Tier B cache", () => {
     expect(NEGATIVE_TTL_MS).toBeLessThan(RESOLVED_TTL_MS);
   });
 
-  it("versions cache keys so S9.9 negative entries cannot suppress the VEVO policy", () => {
-    expect(RESOLVER_POLICY_VERSION).toBe("v2-topic-vevo");
+  it("S9.17: a fresh (deeper) lookup bypasses the cache and merges new recordings with known ones", async () => {
+    let calls = 0;
+    const inner: DynamicLookup = { lookup: async () => (calls++, { kind: "resolved", video: video(calls === 1 ? "AAAAAAAAAAA" : "BBBBBBBBBBB") }) };
+    const dynamic = cachedLookup(inner, createMemoryLookupCache());
+    await dynamic.lookup(artist, "e");
+    const deeper = await dynamic.lookup(artist, "e", { fresh: true });
+    expect(calls).toBe(2);
+    expect(deeper.kind === "resolved" && [deeper.video.videoId, ...(deeper.alternates ?? []).map((v) => v.videoId)]).toEqual(["BBBBBBBBBBB", "AAAAAAAAAAA"]);
+    const cached = await dynamic.lookup(artist, "e");
+    expect(cached).toMatchObject({ cached: true, alternates: [{ videoId: "AAAAAAAAAAA" }] });
+  });
+
+  it("versions cache keys so negative entries from a stricter policy cannot suppress the credited-upload policy", () => {
+    expect(RESOLVER_POLICY_VERSION).toBe("v3-credited");
     expect(lookupCacheKey(artist.entityId)).toContain(`:${RESOLVER_POLICY_VERSION}:`);
     expect(lookupCacheKey(artist.entityId)).not.toBe(`tp:yt:artist:${artist.entityId}`);
   });

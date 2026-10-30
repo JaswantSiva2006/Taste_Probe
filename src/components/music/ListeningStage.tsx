@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArtistIntent, DiscoveryView, ListeningAction } from "@/lib/contracts";
 import { resolvePath } from "@/lib/ui/presentation";
+import type { ListeningEngagement } from "@/lib/api-client";
 import { EntityArt } from "../EntityArt";
 import {
   AnotherSong,
@@ -41,7 +42,7 @@ type Props = {
   pending: boolean;
   passportCount: number;
   onListen: (artistId?: string, videoId?: string) => void;
-  onAction: (action: ListeningAction, intent?: ArtistIntent) => void;
+  onAction: (action: ListeningAction, intent?: ArtistIntent, engagement?: ListeningEngagement) => void;
   onOpenPassport: () => void;
   onStartOver?: () => void;
 };
@@ -86,6 +87,24 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
   const lastAction = useRef<{ action: ListeningAction; intent?: ArtistIntent; revision: number } | null>(null);
   const onPlayback = useCallback((s: PlaybackState) => setPlayback(s), []);
 
+  // S9.17: time the official player actually reported PLAYING for the current recording.
+  // It is sent with the next action as an implicit signal; nothing is sent while listening.
+  const videoId = l?.video?.videoId ?? null;
+  const heard = useRef<{ videoId: string | null; ms: number; since: number | null; full: boolean }>({ videoId: null, ms: 0, since: null, full: false });
+  useEffect(() => {
+    const h = heard.current;
+    const now = performance.now();
+    if (h.videoId !== videoId) Object.assign(h, { videoId, ms: 0, since: null, full: false });
+    if (h.since !== null) { h.ms += now - h.since; h.since = null; }
+    if (phase === "playing") { h.since = now; if (playback?.mode === "full") h.full = true; }
+  }, [videoId, phase, playback?.mode]);
+  const engagement = (): ListeningEngagement | undefined => {
+    const h = heard.current;
+    if (h.videoId !== videoId) return undefined;
+    const ms = h.ms + (h.since !== null ? performance.now() - h.since : 0);
+    return { listenedSeconds: Math.max(0, Math.min(21_600, Math.round(ms / 1000))), playbackMode: h.full ? "full" : "preview" };
+  };
+
   // Truthful confirmation: shown only once the server's new state has arrived.
   useEffect(() => {
     const a = lastAction.current;
@@ -102,7 +121,7 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
   const act = (action: ListeningAction, intent?: ArtistIntent) => {
     lastAction.current = { action, intent, revision: view.revision };
     setConfirm(null);
-    onAction(action, intent);
+    onAction(action, intent, engagement());
   };
 
   const recs = view.recommendations;

@@ -20,11 +20,11 @@ const INFLIGHT = new Map<string, Promise<DynamicOutcome>>();
 export function deduplicated(lookup: DynamicLookup): DynamicLookup {
   return {
     ...(lookup.lookupBatch ? { lookupBatch: lookup.lookupBatch.bind(lookup) } : {}),
-    lookup(artist, explorationId) {
-      const key = `${explorationId}:${artist.entityId}`;
+    lookup(artist, explorationId, options) {
+      const key = `${explorationId}:${artist.entityId}:${options?.fresh ? "fresh" : "any"}`;
       const running = INFLIGHT.get(key);
       if (running) return running;
-      const p = lookup.lookup(artist, explorationId).finally(() => INFLIGHT.delete(key));
+      const p = lookup.lookup(artist, explorationId, options).finally(() => INFLIGHT.delete(key));
       INFLIGHT.set(key, p);
       return p;
     },

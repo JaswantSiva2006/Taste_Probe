@@ -30,7 +30,17 @@ export const ListenRequestSchema = z
 export type ListenRequest = z.infer<typeof ListenRequestSchema>;
 
 export const ListeningFeedbackRequestSchema = z
-  .object({ sessionToken: Token, artistId: EntityId, videoId: VideoId, action: ListeningActionSchema, artistIntent: ArtistIntentSchema.optional() })
+  .object({
+    sessionToken: Token,
+    artistId: EntityId,
+    videoId: VideoId,
+    action: ListeningActionSchema,
+    artistIntent: ArtistIntentSchema.optional(),
+    /** S9.17: seconds the official player actually reported PLAYING for this recording (client-measured, bounded). */
+    listenedSeconds: z.number().int().min(0).max(21_600).optional(),
+    /** Whether that listening was the bounded preview or the full recording. */
+    playbackMode: z.enum(["preview", "full"]).optional(),
+  })
   .strict()
   .refine((r) => !r.artistIntent || (r.artistIntent === "LIKE_ARTIST" ? r.action === "LOVE" : r.action === "NOT_FOR_ME" || r.action === "DIFFERENT_ARTIST"), {
     message: "artistIntent LIKE_ARTIST goes with LOVE; NOT_THIS_ARTIST goes with NOT_FOR_ME or DIFFERENT_ARTIST",
@@ -43,7 +53,7 @@ export const VerifiedSongOptionSchema = z.object({
   videoId: VideoId,
   title: z.string().min(1).max(300),
   channelTitle: z.string().min(1).max(200),
-  channelKind: z.enum(["topic", "vevo", "label", "artist_self_described"]),
+  channelKind: z.enum(["topic", "vevo", "label", "artist_self_described", "credited_upload"]),
   provenance: z.enum(["reviewed_mapping", "youtube_data_api"]),
   watchUrl: z.string().startsWith("https://www.youtube.com/watch?v="),
   verifiedAt: z.string(),
@@ -133,6 +143,10 @@ export const ListeningStateSchema = z.object({
   /** Independent of the bounded UI encounter log: automatic recommendations cannot forget old IDs. */
   seenRecordingIds: z.array(VideoId).max(600).optional(),
   upNext: VerifiedSongOptionSchema.nullable().optional(),
+  /** S9.17 listening engagement per action (implicit signal; never overrides an explicit reaction). */
+  engagement: z.array(z.object({ artistId: EntityId, videoId: VideoId, action: ListeningActionSchema, listenedSeconds: z.number().int().nonnegative(), durationSeconds: z.number().positive().nullable(), mode: z.enum(["preview", "full"]).optional(), at, revision: rev })).max(600).optional(),
+  /** S9.17 model-assisted artist affinity over authorized candidates, refreshed when the evidence changes. */
+  artistAffinity: z.object({ evidenceKey: z.string().max(128), favoured: z.array(EntityId).max(8), disfavoured: z.array(EntityId).max(8), reasonCode: z.string().max(64), atRevision: rev, signals: z.number().int().nonnegative().optional(), positives: z.number().int().nonnegative().optional() }).optional(),
   contextualDecision: z.object({ videoId: VideoId, mode: z.enum(["GEMINI", "DETERMINISTIC"]), reasonCode: z.string(), fallbackReason: z.string().nullable(), score: z.number(), evidenceRefs: z.array(z.string()).max(100), atRevision: rev }).optional(),
 });
 export type ListeningState = z.infer<typeof ListeningStateSchema>;

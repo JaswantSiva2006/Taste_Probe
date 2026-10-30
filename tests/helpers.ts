@@ -13,6 +13,8 @@ export function testConfig(env: Record<string, string> = {}): AppConfig {
   return loadConfig({
     NODE_ENV: "test",
     QLOO_MODE: "mock",
+    // Legacy S9.12 suites cover the flag-off rollback path; adaptive suites opt in explicitly.
+    ADAPTIVE_LISTENING_ENABLED: "false",
     SESSION_SIGNING_SECRET: newTestSecret(),
     ...env,
   });

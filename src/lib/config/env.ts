@@ -79,12 +79,13 @@ const EnvSchema = z.object({
   // without it the dynamic lookup tier is disabled and costs nothing.
   YOUTUBE_API_KEY: optionalString,
   YOUTUBE_TIMEOUT_MS: int(5000, 100, 30_000),
-  YOUTUBE_DAILY_SEARCH_MAX: int(40, 0, 100),
-  YOUTUBE_SEARCHES_PER_EXPLORATION: int(2, 0, 10),
+  YOUTUBE_DAILY_SEARCH_MAX: int(80, 0, 100),
+  YOUTUBE_SEARCHES_PER_EXPLORATION: int(6, 0, 10),
   // Exposes PENDING_REVIEW featured-moment candidates, labelled as unreviewed, for human review. Refused in production.
   MUSIC_MOMENT_REVIEW: bool(false),
   ADAPTIVE_POOL_ENABLED: bool(false),
-  ADAPTIVE_LISTENING_ENABLED: bool(false),
+  // S9.17: on by default — it is what learns from reactions and listening time. Set false to roll back.
+  ADAPTIVE_LISTENING_ENABLED: bool(true),
   // S9.15: legacy non-music journeys (internal regression only). Refused in production.
   LEGACY_GENERIC_JOURNEYS: bool(false),
 });

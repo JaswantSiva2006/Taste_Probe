@@ -54,6 +54,8 @@ async function call<S extends z.ZodType>(url: string, schema: S, init?: RequestI
 
 const post = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 
+export type ListeningEngagement = { listenedSeconds: number; playbackMode: "preview" | "full" };
+
 export const api = {
   health: (): Promise<WithMode<HealthData>> => call("/api/health", HealthDataSchema),
   search: (q: string, type: EntityType): Promise<WithMode<SearchData>> =>
@@ -75,8 +77,9 @@ export const api = {
   // S9.12 listening loop: each call is one signed, revision-checked transition (never retried automatically).
   listen: (sessionToken: string, artistId?: string, videoId?: string): Promise<WithMode<DiscoveryView>> =>
     call("/api/discovery/listen", DiscoveryViewSchema, post({ sessionToken, ...(artistId ? { artistId } : {}), ...(videoId ? { videoId } : {}) })),
-  listeningFeedback: (sessionToken: string, artistId: string, videoId: string, action: ListeningAction, artistIntent?: ArtistIntent): Promise<WithMode<DiscoveryView>> =>
-    call("/api/discovery/feedback", DiscoveryViewSchema, post({ sessionToken, artistId, videoId, action, ...(artistIntent ? { artistIntent } : {}) })),
+  // S9.17: listening time travels with the action as an implicit, bounded signal.
+  listeningFeedback: (sessionToken: string, artistId: string, videoId: string, action: ListeningAction, artistIntent?: ArtistIntent, engagement?: ListeningEngagement): Promise<WithMode<DiscoveryView>> =>
+    call("/api/discovery/feedback", DiscoveryViewSchema, post({ sessionToken, artistId, videoId, action, ...(artistIntent ? { artistIntent } : {}), ...(engagement ?? {}) })),
   resolveMusic: (sessionToken: string, artistId: string): Promise<WithMode<MusicResolution>> =>
     call("/api/music/resolve", MusicResolutionSchema, post({ sessionToken, artistId })),
 };

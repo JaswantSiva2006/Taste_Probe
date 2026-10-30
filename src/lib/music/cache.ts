@@ -81,13 +81,20 @@ export function lookupCacheFor(config: AppConfig): LookupCache {
 }
 
 /** Bump whenever the verifier admits a new identity class or changes negative semantics. */
-export const RESOLVER_POLICY_VERSION = "v2-topic-vevo";
+export const RESOLVER_POLICY_VERSION = "v3-credited";
 export const lookupCacheKey = (artistId: string) => `tp:yt:artist:${RESOLVER_POLICY_VERSION}:${artistId}`;
 
 /** Wraps a lookup with the per-artist cache (outermost: a hit never touches quota). */
 export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicLookup {
+  /** Union with a still-valid cached positive for the same artist (new recordings first, bounded). */
+  const merged = async (artist: { entityId: string; name: string }, found: Extract<DynamicOutcome, { kind: "resolved" }>): Promise<Extract<DynamicOutcome, { kind: "resolved" }>> => {
+    const hit = await cache.get(lookupCacheKey(artist.entityId));
+    const before = hit && hit.outcome.kind === "resolved" && normalizeName(hit.artistName) === normalizeName(artist.name) ? [hit.outcome.video, ...(hit.outcome.alternates ?? [])] : [];
+    const all = [...new Map([found.video, ...(found.alternates ?? []), ...before].map((v) => [v.videoId, v])).values()].slice(0, 24);
+    return { kind: "resolved", video: all[0]!, alternates: all.slice(1) };
+  };
   return {
-    ...(inner.lookupBatch ? { async lookupBatch(artists, explorationId) {
+    ...(inner.lookupBatch ? { async lookupBatch(artists, explorationId, harvest = []) {
       const out: Record<string, DynamicOutcome | null> = {};
       const missing = [];
       for (const artist of artists.slice(0, 6)) {
@@ -96,11 +103,18 @@ export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicL
         else missing.push(artist);
       }
       if (missing.length) {
-        const found = await inner.lookupBatch!(missing, explorationId);
+        const found = await inner.lookupBatch!(missing, explorationId, harvest);
         for (const artist of missing) {
           const result = found[artist.entityId] ?? null; out[artist.entityId] = result;
           // Incomplete OR-query coverage must NEVER poison a single-artist negative cache.
           if (result?.kind === "resolved") await cache.set(lookupCacheKey(artist.entityId), { artistName: artist.name, outcome: result }, RESOLVED_TTL_MS);
+        }
+        // Harvested recordings of other reservoir artists are positive evidence only.
+        for (const artist of harvest) {
+          const result = found[artist.entityId];
+          if (result?.kind !== "resolved" || artist.entityId in out) continue;
+          out[artist.entityId] = result;
+          await cache.set(lookupCacheKey(artist.entityId), { artistName: artist.name, outcome: await merged(artist, result) }, RESOLVED_TTL_MS);
         }
       }
       return out;
@@ -109,10 +123,13 @@ export function cachedLookup(inner: DynamicLookup, cache: LookupCache): DynamicL
       const hit = await cache.get(lookupCacheKey(artist.entityId));
       return hit && normalizeName(hit.artistName) === normalizeName(artist.name) ? { ...hit.outcome, cached: true } : null;
     },
-    async lookup(artist, explorationId) {
-      const hit = await cache.get(lookupCacheKey(artist.entityId));
+    async lookup(artist, explorationId, options) {
+      const hit = options?.fresh ? null : await cache.get(lookupCacheKey(artist.entityId));
       if (hit && normalizeName(hit.artistName) === normalizeName(artist.name)) return { ...hit.outcome, cached: true };
-      const outcome = await inner.lookup(artist, explorationId);
+      const fresh = await inner.lookup(artist, explorationId);
+      // A deliberate deeper search adds to what is already known instead of replacing it.
+      const outcome = fresh.kind === "resolved" && options?.fresh ? await merged(artist, fresh) : fresh;
+      if (options?.fresh && outcome.kind !== "resolved") return outcome;
       if (outcome.kind === "resolved" || outcome.kind === "ambiguous" || outcome.kind === "none") {
         const plain = { ...outcome };
         delete plain.cached;

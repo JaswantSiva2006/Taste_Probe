@@ -17,7 +17,8 @@ export type ChannelKind =
   | "topic" // YouTube's auto-generated "<Artist> - Topic" channel (label-delivered art tracks)
   | "vevo" // the artist's VEVO channel
   | "label" // a named record label's own channel
-  | "artist_self_described"; // the channel calls itself the artist's; not independently established
+  | "artist_self_described" // the channel calls itself the artist's; not independently established
+  | "credited_upload"; // S9.17: a label or other upload whose title/description credits the artist by full name
 
 export type ReviewedVideo = {
   videoId: string;

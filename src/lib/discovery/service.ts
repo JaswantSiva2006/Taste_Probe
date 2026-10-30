@@ -1,5 +1,6 @@
 import "server-only";
-import { rankRecordings, tasteOf } from "@/lib/music/adaptive-listening";
+import { createHash } from "node:crypto";
+import { artistSignals, modelAffinity, rankRecordings, tasteOf, trackSignals } from "@/lib/music/adaptive-listening";
 import { supplySnapshot, supplyPolicy, type SupplyState } from "@/lib/music/supply";
 import type {
   AgentDecision,
@@ -33,10 +34,14 @@ import {
   emptyListening,
   listeningViewOf,
   nextArtistIds,
+  MAX_OPTIONS_PER_ARTIST,
+  boundedOptionsFrom,
   optionsFrom,
+  seenVideoIds,
   recordEncounter,
   trackReactions,
   withArtistFeedback,
+  withEngagement,
   withNavigation,
   withTrackFeedback,
 } from "@/lib/music/listening";
@@ -1178,11 +1183,70 @@ async function chooseSong(deps: DiscoveryDeps, state: SessionState, listening: L
   return { option: chosen, selection: { mode: "GEMINI", reasonCode: r.reasonCode, fallbackReason: null, eligibleCount: count } };
 }
 
-type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number; supplyUpdates: { state?: SessionState; retrievalAttempted?: boolean } };
+type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number; supplyUpdates: { state?: SessionState; retrievalAttempted?: boolean }; affinityRefreshed?: boolean };
+
+const geminiRemaining = (t: Turn) => t.deps.config.limits.maxGeminiRequestsPerExploration - (t.state.session.geminiRequestCount ?? 0) - t.ledger.geminiRequests;
+
+/**
+ * S9.17 resolution priority: which unresolved artists deserve a YouTube lookup first.
+ * Model affinity and the listener's own reactions lead; Qloo's order breaks ties.
+ */
+function artistPriority(l: ListeningState, ids: string[]): (id: string) => number {
+  const position = new Map(ids.map((id, i) => [id, i]));
+  const signals = artistSignals(l);
+  return (id) => 0.5 * modelAffinity(l, id) + 0.3 * (signals.get(id)?.score ?? 0) + 0.4 * (1 - (position.get(id) ?? ids.length) / Math.max(1, ids.length));
+}
+
+/**
+ * S9.17 model-assisted artist affinity. One bounded request whenever the listener's
+ * evidence materially changes (bucketed, so small listening-time differences do not
+ * re-trigger), including once at the start from the starting point alone. The model
+ * may only order authorized Qloo candidates; its output is a soft ranking term.
+ */
+async function refreshArtistAffinity(t: Turn, l: ListeningState, ids: string[]): Promise<ListeningState> {
+  const selector = t.deps.songSelector;
+  if (!selector?.rankArtists || geminiRemaining(t) < 2) return l;
+  const signals = artistSignals(l);
+  const evidence = [...signals].map(([id, s]) => `${id}:${Math.round(s.score * 2)}`).sort();
+  const evidenceKey = createHash("sha256").update(JSON.stringify([t.state.seed.entityId, evidence, [...t.state.session.positiveTagIds].sort(), [...t.state.session.rejectedTagIds].sort(), [...t.state.session.rejectedEntityIds].sort()])).digest("hex").slice(0, 32);
+  if (l.artistAffinity?.evidenceKey === evidenceKey) return l;
+  // Spend on what matters: any new positive signal, or a few new signals of any kind.
+  const all = [...trackSignals(l).values()];
+  const positives = all.filter((s) => s.weight > 0).length + l.artistFeedback.filter((f) => f.action === "like_artist").length;
+  const previous = l.artistAffinity;
+  if (previous && positives <= (previous.positives ?? 0) && all.length - (previous.signals ?? 0) < 3) return l;
+  const candidates = ids.slice(0, 40).map((id) => t.state.candidates.find((c) => c.entityId === id)).filter((c): c is NonNullable<typeof c> => !!c && c.entityType === "music_artist");
+  if (candidates.length < 3) return l;
+  const titles = new Map(l.encounters.map((e) => [e.videoId, e.title]));
+  const side = (positive: boolean) => [...signals].filter(([, s]) => (positive ? s.score > 0 : s.score < 0)).sort((a, b) => Math.abs(b[1].score) - Math.abs(a[1].score)).map(([id, s]) => ({
+    name: candidateName(t.state, id),
+    strength: s.strong ? ("strong" as const) : ("weak" as const),
+    recordings: [...trackSignals(l).values()].filter((x) => x.artistId === id && (positive ? x.weight > 0 : x.weight < 0)).map((x) => titles.get(x.videoId)).filter((x): x is string => !!x),
+  }));
+  const evidenceNames = songEvidence(t.state, l);
+  t.ledger.geminiRequests += 1; // accounted before execution, failures included
+  t.ledger.geminiDecisionRequests += 1;
+  t.affinityRefreshed = true;
+  try {
+    const r = await selector.rankArtists({
+      sessionRef: t.state.session.sessionId.slice(0, 8),
+      anchor: { name: t.state.seed.name, domain: t.state.seed.entityType },
+      liked: side(true), disliked: side(false),
+      confirmedLikes: evidenceNames.likes, confirmedDislikes: evidenceNames.dislikes,
+      candidates: candidates.map((c) => ({ entityId: c.entityId, name: c.name, tags: c.tags.map((tag) => tag.name) })),
+    });
+    t.ledger.tokens.input += r.usage.promptTokens; t.ledger.tokens.output += r.usage.outputTokens; t.ledger.tokens.thinking += r.usage.thoughtTokens;
+    if (r.costUsd === null) t.ledger.geminiCostKnown = false; else t.ledger.geminiCostUsd += r.costUsd;
+    if (!r.ok) return l;
+    return { ...l, artistAffinity: { evidenceKey, favoured: r.favoured, disfavoured: r.disfavoured, reasonCode: r.reasonCode, atRevision: t.revision, signals: all.length, positives } };
+  } catch {
+    return l; // accounted attempt; deterministic ranking continues
+  }
+}
 
 /** Bounded cross-artist supply. Reviewed mappings cost no lookup; dynamic attempts retain shared quotas. */
-async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = false, differentArtist = false): Promise<ListeningState> {
-  let l = { ...listening, upNext: null };
+async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = false, differentArtist = false, deepenArtistId?: string): Promise<ListeningState> {
+  let l: ListeningState = { ...listening, upNext: null };
   const inventory = [...(l.inventory ?? []), ...l.options];
   const resolutions: SupplyState["resolutions"] = (l.supply?.resolutions ?? []).filter((r) => t.state.candidates.some((c) => c.entityId === r.artistId));
   const saveResolution = (entry: SupplyState["resolutions"][number]) => {
@@ -1190,8 +1254,11 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
     if (index >= 0) resolutions[index] = entry; else resolutions.push(entry);
   };
   const ids = listeningArtistOrder(t.deps, t.state).filter((id) => !excludedArtists(t.state).has(id));
+  l = await refreshArtistAffinity(t, l, ids);
+  const priority = artistPriority(l, ids);
+  const byPriority = [...ids].sort((a, b) => priority(b) - priority(a));
   const remember = (r: NonNullable<Awaited<ReturnType<typeof songResolution>>>) => {
-    const options = optionsFrom(r);
+    const options = boundedOptionsFrom(r, 24);
     inventory.push(...options);
     const retryAt = r.status === "RESOLVED" ? t.at + 86_400_000 : r.status === "UPSTREAM_FAILURE" ? t.at + 30_000 : r.status === "RATE_LIMITED" ? t.state.session.expiresAt : t.at + 6 * 3_600_000;
     const entry = { artistId: r.artist.entityId, status: r.status, reason: r.reason, lookup: r.dynamicLookup, checkedAt: t.at, retryAt, options: options.length };
@@ -1200,7 +1267,7 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
   let cacheChecks = 0;
   const cacheCandidates: Array<{ entityId: string; name: string }> = [];
   // Exhaust the free supply first. Cached negatives retain their exact reason and retry time.
-  for (const id of ids.slice(0, 90)) {
+  for (const id of byPriority.slice(0, 90)) {
     if (inventory.some((o) => o.artistId === id) || resolutions.some((r) => r.artistId === id && r.retryAt > t.at)) continue;
     if (!reviewedMappingFor(id)) {
       if (!t.deps.musicLookup) {
@@ -1219,7 +1286,7 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
   const cacheHits = await Promise.all(cacheCandidates.map((artist) => t.deps.musicLookup!.peek!(artist).catch(() => null)));
   for (let i = 0; i < cacheCandidates.length; i++) {
     const id = cacheCandidates[i]!.entityId, hit = cacheHits[i];
-    if (!hit) { saveResolution({ artistId: id, status: "UNRESOLVED", reason: "cache_miss_not_a_negative_result", lookup: "CACHE_MISS", checkedAt: t.at, retryAt: t.at, options: 0 }); continue; }
+    if (!hit) { if (!resolutions.some((r) => r.artistId === id && r.status === "DEFERRED")) saveResolution({ artistId: id, status: "UNRESOLVED", reason: "cache_miss_not_a_negative_result", lookup: "CACHE_MISS", checkedAt: t.at, retryAt: t.at, options: 0 }); continue; }
     const result = await songResolution({ ...t.deps, musicLookup: { lookup: async () => hit } }, t.state, id);
     if (result) remember(result);
   }
@@ -1235,29 +1302,63 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
     return { ranks, unresolved, policy };
   };
   let available = sync();
-  let batches = 0;
-  while (available.policy.decision === "LOCAL_RESOLVE" && t.deps.musicLookup?.lookupBatch && batches++ < 2) {
-    const artists = available.unresolved.slice(0, 6).map((id) => ({ entityId: id, name: candidateName(t.state, id) }));
-    if (!artists.length) break;
-    try {
-      const found = await t.deps.musicLookup.lookupBatch(artists, t.state.session.sessionId);
-      for (const artist of artists) {
-        const result = found[artist.entityId];
-        if (result) {
-          const resolution = await songResolution({ ...t.deps, musicLookup: { lookup: async () => result } }, t.state, artist.entityId);
-          if (resolution) remember(resolution);
-        } else saveResolution({ artistId: artist.entityId, status: "DEFERRED", reason: "batch_query_no_verified_result", lookup: "BATCH_DEFERRED", checkedAt: t.at, retryAt: t.state.session.expiresAt, options: 0 });
-      }
-    } catch { for (const artist of artists) saveResolution({ artistId: artist.entityId, status: "UPSTREAM_FAILURE", reason: "batch_lookup_failed", lookup: "FAILED", checkedAt: t.at, retryAt: t.at + 30_000, options: 0 }); }
-    available = sync();
+  const lookup = t.deps.musicLookup;
+  const quotaOpen = () => !resolutions.some((r) => r.status === "RATE_LIMITED" && r.retryAt > t.at);
+  const fromOutcome = async (artistId: string, outcome: Awaited<ReturnType<DynamicLookup["lookup"]>>) => {
+    const resolution = await songResolution({ ...t.deps, musicLookup: { lookup: async () => outcome } }, t.state, artistId);
+    if (resolution) remember(resolution);
+  };
+  // A loved artist with little unseen supply gets one deliberate deeper search (merged, never replacing).
+  if (deepenArtistId && lookup && quotaOpen() && !resolutions.some((r) => r.artistId === deepenArtistId && r.lookup === "DEEPENED")) {
+    const seen = seenVideoIds(l);
+    if (new Set(inventory.filter((o) => o.artistId === deepenArtistId && !seen.has(o.videoId)).map((o) => o.videoId)).size < 3) {
+      try {
+        const outcome = await lookup.lookup({ entityId: deepenArtistId, name: candidateName(t.state, deepenArtistId) }, t.state.session.sessionId, { fresh: true });
+        if (outcome.kind === "resolved") await fromOutcome(deepenArtistId, outcome);
+        const entry = resolutions.find((r) => r.artistId === deepenArtistId);
+        if (entry) entry.lookup = "DEEPENED";
+        if (outcome.kind === "quota") saveResolution({ artistId: deepenArtistId, status: "RATE_LIMITED", reason: "youtube_quota_exhausted", lookup: "DEEPENED", checkedAt: t.at, retryAt: t.state.session.expiresAt, options: inventory.filter((o) => o.artistId === deepenArtistId).length });
+      } catch { /* the loved recording and its feedback are kept */ }
+      available = sync();
+    }
   }
-  for (const id of !t.deps.musicLookup?.lookupBatch && available.policy.decision === "LOCAL_RESOLVE" ? available.unresolved.slice(0, 3) : []) {
+  // Lookups follow artist priority. They run when the runway is low, and also (once per
+  // turn) when an unresolved artist outranks the best playable one: a likely favourite is
+  // never left unreachable just because weaker supply exists.
+  let lookups = 0;
+  while (lookup && quotaOpen() && lookups < (lookup.lookupBatch ? 2 : 3)) {
+    const ordered = [...available.unresolved].sort((a, b) => priority(b) - priority(a));
+    const first = ordered[0];
+    if (!first) break;
+    const best = available.ranks[0]?.option.artistId;
+    const wanted = available.policy.decision === "LOCAL_RESOLVE" || (lookups === 0 && (!best || priority(first) > priority(best) + 0.05));
+    if (!wanted) break;
+    lookups++;
+    const deferred = resolutions.some((r) => r.artistId === first && r.status === "DEFERRED");
     try {
-      const result = await songResolution(t.deps, t.state, id);
-      if (result) remember(result);
-    } catch { saveResolution({ artistId: id, status: "UPSTREAM_FAILURE", reason: "resolver_error", lookup: "FAILED", checkedAt: t.at, retryAt: t.at + 30_000, options: 0 }); }
+      if (deferred || !lookup.lookupBatch) {
+        // Crowded out of a shared query: a focused search for this one artist.
+        const result = await songResolution(t.deps, t.state, first);
+        if (result) remember(result);
+      } else {
+        const batch = ordered.filter((id) => !resolutions.some((r) => r.artistId === id && r.status === "DEFERRED")).slice(0, 6);
+        const artists = batch.map((id) => ({ entityId: id, name: candidateName(t.state, id) }));
+        const harvest = ids.filter((id) => !batch.includes(id) && !inventory.some((o) => o.artistId === id)).slice(0, 84).map((id) => ({ entityId: id, name: candidateName(t.state, id) }));
+        const found = await lookup.lookupBatch(artists, t.state.session.sessionId, harvest);
+        for (const artist of artists) {
+          const result = found[artist.entityId];
+          if (result) await fromOutcome(artist.entityId, result);
+          else saveResolution({ artistId: artist.entityId, status: "DEFERRED", reason: "batch_query_no_verified_result", lookup: "BATCH_DEFERRED", checkedAt: t.at, retryAt: t.at, options: 0 });
+        }
+        for (const artist of harvest) {
+          const result = found[artist.entityId];
+          if (result?.kind === "resolved") await fromOutcome(artist.entityId, result);
+        }
+      }
+    } catch {
+      saveResolution({ artistId: first, status: "UPSTREAM_FAILURE", reason: "resolver_error", lookup: "FAILED", checkedAt: t.at, retryAt: t.at + 30_000, options: 0 });
+    }
     available = sync();
-    if (available.policy.decision !== "LOCAL_RESOLVE") break;
   }
   if (available.policy.decision === "FETCH_ARTISTS" && !t.supplyUpdates.retrievalAttempted) {
     t.supplyUpdates.retrievalAttempted = true;
@@ -1289,7 +1390,10 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
   if (!t.deps.songSelector) fallbackReason = "llm_unavailable";
   else if (remaining <= 0) fallbackReason = "exploration_gemini_budget_exhausted";
   else if (!meaningful) fallbackReason = "no_new_preference_event";
-  if (meaningful && shortlist.length > 1 && t.deps.songSelector && remaining > 0) {
+  else if (t.affinityRefreshed) fallbackReason = "artist_affinity_refreshed";
+  // A current model artist ranking already informs this choice; the title-only comparison would add cost, not evidence.
+  else if (l.artistAffinity) fallbackReason = "artist_affinity_current";
+  if (meaningful && !t.affinityRefreshed && !l.artistAffinity && shortlist.length > 1 && t.deps.songSelector && remaining > 0) {
     t.ledger.geminiRequests++; t.ledger.geminiDecisionRequests++;
     fallbackReason = "gemini_failure";
     try {
@@ -1309,7 +1413,7 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
   }
   l = { ...l, supply: { ...l.supply!, selectedArtistId: chosen.option.artistId, selectedVideoId: chosen.option.videoId }, contextualDecision: { videoId: chosen.option.videoId, mode, reasonCode, fallbackReason, score: chosen.score, evidenceRefs: chosen.evidenceRefs.slice(0, 100), atRevision: t.revision } };
   if (prepareOnly) return { ...l, upNext: chosen.option, notice: "up_next_prepared", geminiSongRequests: l.geminiSongRequests + (mode === "GEMINI" ? 1 : 0) };
-  const presented = encounter(t, l, chosen.option.artistId, unique.filter((o) => o.artistId === chosen.option.artistId), {
+  const presented = encounter(t, l, chosen.option.artistId, [chosen.option, ...unique.filter((o) => o.artistId === chosen.option.artistId && o.videoId !== chosen.option.videoId)].slice(0, MAX_OPTIONS_PER_ARTIST), {
     option: chosen.option, selection: { mode, reasonCode, fallbackReason, eligibleCount: ranked.length },
   }, "adaptive_next_ready");
   return { ...presented, supply: { ...supplySnapshot(t.state.candidates, presented, t.at, [...excludedArtists(t.state)]), decision: l.supply!.decision, reasons: l.supply!.reasons } };
@@ -1400,10 +1504,21 @@ async function moveToNextArtist(t: Turn, l: ListeningState): Promise<ListeningSt
 
 /** Records an explicit artist-level preference and lets the S9.11 controller decide on retrieval. */
 async function likeArtist(t: Turn, state: SessionState, artistId: string): Promise<SessionState> {
-  let next: SessionState = {
+  const next: SessionState = {
     ...state,
     session: { ...state.session, positiveEntityIds: [...new Set([...state.session.positiveEntityIds, artistId])] },
   };
+  return expandFromArtist(t, next, artistId, state.order);
+}
+
+/**
+ * Asks Qloo for this artist's neighbourhood through the existing adaptive planner
+ * (deduplicated plans, cumulative Qloo allowance). S9.17: a loved recording is a
+ * retrieval seed too, so artists Qloo did not return for the starting point can
+ * still be reached. It does not record an artist preference.
+ */
+async function expandFromArtist(t: Turn, state: SessionState, artistId: string, previousOrder: string[] | null = state.order): Promise<SessionState> {
+  let next = state;
   if (t.deps.config.features.adaptivePool && next.adaptivePool) {
     const live: LiveDeps = {
       config: t.deps.config,
@@ -1414,7 +1529,7 @@ async function likeArtist(t: Turn, state: SessionState, artistId: string): Promi
     };
     next = (await retrieveAdaptive(live, next, t.ledger, { positiveTagIds: [], positiveEntityIds: [artistId] })).state;
   }
-  return withOrder(next, state.order);
+  return withOrder(next, previousOrder);
 }
 
 function rejectArtist(state: SessionState, artistId: string): SessionState {
@@ -1540,6 +1655,12 @@ export async function listeningFeedback(deps: DiscoveryDeps, input: ListeningFee
     if (!current) throw new AppError("LISTENING_STATE_CONFLICT", 409, "That recording is not verified for this artist");
     let state = t.state;
     let l: ListeningState = { ...l0, notice: null };
+    if (input.listenedSeconds !== undefined) {
+      const duration = current.durationSeconds ?? null;
+      // Bounded by the recording itself: a forged value cannot claim more than one full play.
+      const listened = Math.min(input.listenedSeconds, Math.ceil(duration ?? 21_600));
+      l = withEngagement(l, { artistId, videoId: current.videoId, action: input.action, listenedSeconds: listened, durationSeconds: duration, ...(input.playbackMode ? { mode: input.playbackMode } : {}), at: t.at, revision: t.revision });
+    }
     const track = (action: "love" | "not_for_me") => withTrackFeedback(l, { artistId, videoId: current.videoId, action, at: t.at, revision: t.revision });
     const nav = (action: "NEXT" | "ANOTHER_SONG" | "DIFFERENT_ARTIST") => withNavigation(l, { action, artistId, videoId: current.videoId, at: t.at, revision: t.revision });
     const notThisArtist = () => {
@@ -1554,8 +1675,11 @@ export async function listeningFeedback(deps: DiscoveryDeps, input: ListeningFee
         if (input.artistIntent === "LIKE_ARTIST") {
           l = withArtistFeedback(l, { artistId, action: "like_artist", at: t.at, revision: t.revision });
           state = await likeArtist(t, state, artistId);
+        } else if (!l.trackFeedback.some((f) => f.artistId === artistId && f.action === "love" && f.revision !== t.revision)) {
+          // First loved recording of this artist: widen the reservoir around them.
+          state = await expandFromArtist(t, state, artistId);
         }
-        if (deps.config.features.adaptiveListening) l = await adaptiveNext({ ...t, state }, l, true);
+        if (deps.config.features.adaptiveListening) l = await adaptiveNext({ ...t, state }, l, true, false, artistId);
         break;
       }
       case "NOT_FOR_ME": {

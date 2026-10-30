@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiClientError } from "@/lib/api-client";
 import type { ArtistIntent, DiscoveryView, EntitySummary, EntityType, ListeningAction, PreferenceResponse, ProviderMode } from "@/lib/contracts";
+import type { ListeningEngagement } from "@/lib/api-client";
 import { MUSIC_DESTINATION } from "@/lib/contracts/capabilities";
 import { isOfferedPair, sourceChoices, targetChoices } from "@/lib/ui/domains";
 import { createNameBook, friendlyError, type FriendlyError } from "@/lib/ui/presentation";
@@ -213,13 +214,13 @@ export function DiscoveryApp() {
   }
 
   /** S9.12: one listening action on the recording the server presented. */
-  function listenAction(action: ListeningAction, artistIntent?: ArtistIntent) {
+  function listenAction(action: ListeningAction, artistIntent?: ArtistIntent, engagement?: ListeningEngagement) {
     const current = view?.listening;
     if (!view || !current?.artist || !current.video) return;
     const { sessionToken } = view;
     const { entityId } = current.artist;
     const { videoId } = current.video;
-    const attempt = () => void run("listen", () => api.listeningFeedback(sessionToken, entityId, videoId, action, artistIntent), accept, attempt);
+    const attempt = () => void run("listen", () => api.listeningFeedback(sessionToken, entityId, videoId, action, artistIntent, engagement), accept, attempt);
     attempt();
   }
 
