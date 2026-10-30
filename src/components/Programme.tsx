@@ -16,10 +16,12 @@ import {
 } from "@/lib/ui/presentation";
 import { ArrowRight, Check, Cross, Refresh } from "./Icons";
 import { ListeningRoom } from "./music/ListeningRoom";
+import { ListeningSession } from "./music/ListeningSession";
+import type { ArtistIntent, ListeningAction } from "@/lib/contracts";
 import { ResultCard } from "./ResultShelf";
 import { TasteNotes } from "./Workspace";
 
-type ActionKind = "reject" | "accept" | "continue";
+type ActionKind = "reject" | "accept" | "continue" | "listen";
 
 type Props = {
   view: DiscoveryView;
@@ -29,6 +31,9 @@ type Props = {
   onReject: (entityId: string) => void;
   onAccept: (entityId: string) => void;
   onContinue: () => void;
+  /** S9.12 listening loop (music journeys). */
+  onListen: (artistId?: string) => void;
+  onListenAction: (action: ListeningAction, intent?: ArtistIntent) => void;
   onRestart: () => void;
   onNewAnchor: () => void;
 };
@@ -82,6 +87,7 @@ function PickActions({ rec, busy, onAccept, onReject, listen, size = "md" }: { r
 }
 
 const PENDING_COPY: Record<ActionKind, string> = {
+  listen: "Updating your listening…",
   accept: "Saving your choice…",
   reject: "Updating your picks…",
   continue: "Opening the next round…",
@@ -116,6 +122,8 @@ export function Programme(p: Props) {
     ? {
         selectedId: listening?.candidate.entityId ?? null,
         onListen: (rec) => {
+          // Once a listening session exists, "Listen" switches it on the server; before that it previews.
+          if (view.listening) return p.onListen(rec.candidate.entityId);
           setChosenId(rec.candidate.entityId);
           requestAnimationFrame(() => document.getElementById("tp-listen-title")?.focus());
         },
@@ -143,8 +151,20 @@ export function Programme(p: Props) {
         {p.pending ? PENDING_COPY[p.pending] : ""}
       </p>
 
-      {listening ? (
-        <ListeningRoom sessionToken={view.sessionToken} artist={{ entityId: listening.candidate.entityId, name: listening.candidate.name }} />
+      {isMusic && view.listening ? (
+        <ListeningSession listening={view.listening} busy={p.busy} pending={p.pending === "listen"} onAction={p.onListenAction} onListen={p.onListen} />
+      ) : listening ? (
+        <>
+          <ListeningRoom sessionToken={view.sessionToken} artist={{ entityId: listening.candidate.entityId, name: listening.candidate.name }} />
+          {actionable ? (
+            <div className="tp-listen__start">
+              <button type="button" className="tp-btn tp-btn--ink-solid tp-btn--sm" disabled={p.busy} onClick={() => p.onListen(listening.candidate.entityId)}>
+                Start listening with {listening.candidate.name}
+              </button>
+              <p className="tp-listen__note">TasteProbe then picks verified recordings for you, remembers what you love or skip, and can move on to other artists.</p>
+            </div>
+          ) : null}
+        </>
       ) : null}
 
       {lead ? (

@@ -12,6 +12,7 @@ import {
   RankedRecommendationSchema,
 } from "./domain";
 import { PublicCapabilitiesSchema } from "./capabilities";
+import { ListeningViewSchema } from "./listening";
 
 /**
  * HTTP wire contracts. The session token travels in the JSON body:
@@ -53,6 +54,10 @@ export const ApiErrorCodeSchema = z.enum([
   "INVALID_RECOMMENDATION",
   // S9.9 music playback
   "ARTIST_NOT_IN_EXPLORATION",
+  // S9.12 listening loop
+  "LISTENING_NOT_STARTED",
+  "LISTENING_STATE_CONFLICT",
+  "LISTENING_FINISHED",
   "QLOO_BUDGET_EXHAUSTED",
   "QLOO_AUTH_ERROR",
   "QLOO_PERMISSION_ERROR",
@@ -366,5 +371,7 @@ export const DiscoveryViewSchema = z.object({
   discoveryPath: DiscoveryPathSchema.optional(),
   /** S9.6: multi-round exploration state (additive; old clients may ignore it). */
   exploration: ExplorationStateSchema.optional(),
+  /** S9.12: listening loop (music explorations only; additive). */
+  listening: ListeningViewSchema.optional(),
 });
 export type DiscoveryView = z.infer<typeof DiscoveryViewSchema>;

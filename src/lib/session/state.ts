@@ -12,6 +12,7 @@ import {
 } from "@/lib/contracts";
 import { AppError } from "@/lib/validation/errors";
 import { AdaptivePoolStateSchema } from "@/lib/discovery/adaptive-pool";
+import { ListeningStateSchema } from "@/lib/contracts/listening";
 import { signToken, verifyToken } from "./token";
 
 /** Full session state. Authoritative copy lives in the SessionStore, never in the token. */
@@ -24,6 +25,8 @@ export const SessionStateSchema = z.object({
   finishReason: FinishReasonSchema.nullable(),
   /** S9.10 optional foundation; absent is the exact pre-S9.10 session shape. */
   adaptivePool: AdaptivePoolStateSchema.optional(),
+  /** S9.12 optional listening loop; absent until the user starts listening. */
+  listening: ListeningStateSchema.optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 

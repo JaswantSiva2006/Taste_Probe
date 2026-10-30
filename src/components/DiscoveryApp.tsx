@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiClientError } from "@/lib/api-client";
-import type { DiscoveryView, EntitySummary, EntityType, PreferenceResponse, ProviderMode } from "@/lib/contracts";
+import type { ArtistIntent, DiscoveryView, EntitySummary, EntityType, ListeningAction, PreferenceResponse, ProviderMode } from "@/lib/contracts";
 import { isOfferedPair, sourceChoices, targetChoices } from "@/lib/ui/domains";
 import { createNameBook, friendlyError, type FriendlyError } from "@/lib/ui/presentation";
 import { Refresh, Reel } from "./Icons";
@@ -10,7 +10,7 @@ import { Landing, type Capabilities } from "./Landing";
 import { Programme } from "./Programme";
 import { Workspace } from "./Workspace";
 
-type Pending = null | "search" | "start" | "answer" | "finish" | "reject" | "accept" | "continue";
+type Pending = null | "search" | "start" | "answer" | "finish" | "reject" | "accept" | "continue" | "listen";
 type ShownError = FriendlyError & { code: string; requestId?: string; retry?: () => void };
 
 /**
@@ -71,7 +71,9 @@ export function DiscoveryApp() {
     if (!view) return;
     // After "Not for me", focus the replacement START HERE instead of jumping to the page title.
     const afterReject = lastAction.current === "reject" && view.exploration?.status === "presenting";
-    const id = view.status !== "finished" ? "tp-question" : afterReject ? "tp-start-label" : "tp-programme-title";
+    // A listening action keeps focus in the listening room (S9.12).
+    const afterListen = lastAction.current === "listen" && view.listening;
+    const id = view.status !== "finished" ? "tp-question" : afterListen ? "tp-listen-title" : afterReject ? "tp-start-label" : "tp-programme-title";
     (document.getElementById(id) ?? document.getElementById("tp-programme-title"))?.focus({ preventScroll: false });
   }, [view?.sessionId, view?.revision, view?.status, view]);
 
@@ -207,6 +209,25 @@ export function DiscoveryApp() {
     attempt();
   }
 
+  /** S9.12: start or switch listening (server picks a verified recording). */
+  function listen(artistId?: string) {
+    if (!view) return;
+    const { sessionToken } = view;
+    const attempt = () => void run("listen", () => api.listen(sessionToken, artistId), accept, attempt);
+    attempt();
+  }
+
+  /** S9.12: one listening action on the recording the server presented. */
+  function listenAction(action: ListeningAction, artistIntent?: ArtistIntent) {
+    const current = view?.listening;
+    if (!view || !current?.artist || !current.video) return;
+    const { sessionToken } = view;
+    const { entityId } = current.artist;
+    const { videoId } = current.video;
+    const attempt = () => void run("listen", () => api.listeningFeedback(sessionToken, entityId, videoId, action, artistIntent), accept, attempt);
+    attempt();
+  }
+
   function keepExploring() {
     if (!view?.exploration?.canContinue) return;
     const { sessionToken } = view;
@@ -319,11 +340,13 @@ export function DiscoveryApp() {
           <Programme
             view={view}
             names={names}
-            pending={pending === "reject" || pending === "accept" || pending === "continue" ? pending : null}
+            pending={pending === "reject" || pending === "accept" || pending === "continue" || pending === "listen" ? pending : null}
             busy={busy}
             onReject={rejectPick}
             onAccept={acceptPick}
             onContinue={keepExploring}
+            onListen={listen}
+            onListenAction={listenAction}
             onRestart={() => restart()}
             onNewAnchor={() => restart(true)}
           />

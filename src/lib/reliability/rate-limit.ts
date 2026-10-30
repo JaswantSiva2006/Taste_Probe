@@ -6,7 +6,7 @@ import { AppError } from "@/lib/validation/errors";
 
 /** S9.6: "continue" opens a new paid round, so it is limited like "start" (own bucket, same max). */
 /** S9.9: "resolve" (music video lookup) is read-only and has its own bucket. */
-export type RateLimitAction = "search" | "start" | "answer" | "continue" | "resolve";
+export type RateLimitAction = "search" | "start" | "answer" | "continue" | "resolve" | "listen";
 export type RateLimitResult = { count: number; resetAt: number };
 export interface RateLimitStore {
   increment(key: string, windowMs: number, now: number): Promise<RateLimitResult>;
@@ -90,7 +90,7 @@ export async function enforceRateLimit(
   const max =
     action === "search" ? config.rateLimit.searchMax
       : action === "start" || action === "continue" ? config.rateLimit.startMax
-      : action === "resolve" ? config.rateLimit.resolveMax
+      : action === "resolve" || action === "listen" ? config.rateLimit.resolveMax
       : config.rateLimit.answerMax;
   const now = options.now ?? Date.now();
   const windowMs = config.rateLimit.windowSeconds * 1_000;
