@@ -28,7 +28,7 @@ const UNAVAILABLE_COPY: Record<string, string> = {
   no_match: "YouTube had no video we could confirm is by this artist.",
   mapping_stale: "Our check of this artist’s video is out of date, so it isn’t played until it is reviewed again.",
   artist_name_mismatch: "The verified video no longer matches this artist’s name, so it isn’t played.",
-  youtube_quota_exhausted: "Today’s video lookups are used up.",
+  youtube_quota_exhausted: "TasteProbe’s video-lookup allowance is used up for now (for this exploration or for today).",
 };
 
 function explain(result: MusicResolution): string {

@@ -49,7 +49,8 @@ export const MusicResolutionSchema = z.object({
   featuredMoment: FeaturedMomentSchema.nullable(),
   fallback: z.object({ label: z.string(), url: YouTubeUrl("https://www.youtube.com/results?") }),
   reason: z.string().nullable(),
-  dynamicLookup: z.enum(["DISABLED_NO_KEY", "NOT_NEEDED", "USED", "QUOTA_EXHAUSTED", "FAILED"]),
+  /** CACHED: a recent Data API result for this artist was reused (no quota spent, same video). */
+  dynamicLookup: z.enum(["DISABLED_NO_KEY", "NOT_NEEDED", "USED", "CACHED", "QUOTA_EXHAUSTED", "FAILED"]),
   checkedAt: z.string(),
 });
 export type MusicResolution = z.infer<typeof MusicResolutionSchema>;

@@ -6,6 +6,7 @@ import { deduplicated } from "@/lib/music/service";
 import { QLOO_ENTITY_ID, YOUTUBE_VIDEO_ID, momentWithinBounds, searchUrl, watchUrl, type ReviewedMapping } from "@/lib/music/types";
 import { createQuotaGuard, createYouTubeDataLookup, parseIsoDuration, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
 import { createMemoryRateLimitStore } from "@/lib/reliability/rate-limit";
+import { NEGATIVE_TTL_MS, RESOLVED_TTL_MS, cachedLookup, createMemoryLookupCache, createRedisLookupCache } from "@/lib/music/cache";
 
 /** S9.9 resolver, registry and optional Data API tier. Offline: no YouTube, Qloo or Gemini calls. */
 
@@ -258,7 +259,8 @@ describe("optional YouTube Data API tier", () => {
       },
     };
     const d = deduplicated(inner);
-    await Promise.all([d.lookup("X", "e"), d.lookup("X", "e"), d.lookup("X", "e")]);
+    const x = { entityId: "X", name: "X" };
+    await Promise.all([d.lookup(x, "e"), d.lookup(x, "e"), d.lookup(x, "e")]);
     expect(calls).toBe(1);
   });
 
@@ -266,5 +268,73 @@ describe("optional YouTube Data API tier", () => {
     expect(parseIsoDuration("PT6M31S")).toBe(391);
     expect(parseIsoDuration("PT1H")).toBe(3600);
     expect(parseIsoDuration("P1D")).toBeUndefined();
+  });
+});
+
+describe("per-artist Tier B cache", () => {
+  const artist = { entityId: "11111111-1111-4111-8111-111111111111", name: "New Artist", provenance: "qloo" as const };
+  const video = (videoId: string) => ({ videoId, title: "Song", channelTitle: "New Artist - Topic", watchUrl: `https://www.youtube.com/watch?v=${videoId}`, provenance: "youtube_data_api" as const, channelKind: "topic" as const, verifiedAt: NOW.toISOString() });
+
+  it("a second resolve reuses the same video, spends no quota and is labelled CACHED", async () => {
+    let calls = 0;
+    const take = vi.fn(async () => true);
+    const inner: DynamicLookup = {
+      lookup: async () => {
+        if (!(await take())) return { kind: "quota" };
+        calls += 1;
+        return { kind: "resolved", video: video(calls === 1 ? "AAAAAAAAAAA" : "BBBBBBBBBBB") };
+      },
+    };
+    const dynamic = cachedLookup(inner, createMemoryLookupCache());
+    const first = await resolveArtistVideo(artist, opts({ dynamic }));
+    const second = await resolveArtistVideo(artist, opts({ dynamic, explorationId: "another" }));
+    expect(first).toMatchObject({ dynamicLookup: "USED", video: { videoId: "AAAAAAAAAAA" } });
+    expect(second).toMatchObject({ status: "RESOLVED", dynamicLookup: "CACHED", video: { videoId: "AAAAAAAAAAA" } });
+    expect(calls).toBe(1);
+    expect(take).toHaveBeenCalledTimes(1);
+    parse(second);
+  });
+
+  it("quota refusals and failures are never cached; negative outcomes are", async () => {
+    const outcomes = [{ kind: "quota" as const }, { kind: "failed" as const, reason: "youtube_error" }, { kind: "ambiguous" as const, reason: "no_topic_channel_match" }];
+    let i = 0;
+    const inner: DynamicLookup = { lookup: async () => outcomes[Math.min(i++, outcomes.length - 1)]! };
+    const dynamic = cachedLookup(inner, createMemoryLookupCache());
+    expect((await resolveArtistVideo(artist, opts({ dynamic }))).status).toBe("RATE_LIMITED");
+    expect((await resolveArtistVideo(artist, opts({ dynamic }))).status).toBe("UPSTREAM_FAILURE");
+    expect(await resolveArtistVideo(artist, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", dynamicLookup: "USED" });
+    expect(await resolveArtistVideo(artist, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", dynamicLookup: "CACHED" });
+    expect(i).toBe(3);
+  });
+
+  it("entries expire (24 h resolved, 6 h negative) and a renamed artist misses", async () => {
+    let now = 0;
+    const cache = createMemoryLookupCache(() => now);
+    let calls = 0;
+    const inner: DynamicLookup = { lookup: async () => (calls++, { kind: "resolved", video: video("AAAAAAAAAAA") }) };
+    const dynamic = cachedLookup(inner, cache);
+    await dynamic.lookup(artist, "e");
+    now = RESOLVED_TTL_MS - 1;
+    await dynamic.lookup(artist, "e");
+    expect(calls).toBe(1);
+    now = RESOLVED_TTL_MS + 1;
+    await dynamic.lookup(artist, "e");
+    expect(calls).toBe(2);
+    await dynamic.lookup({ ...artist, name: "Different Name" }, "e");
+    expect(calls).toBe(3);
+    expect(NEGATIVE_TTL_MS).toBeLessThan(RESOLVED_TTL_MS);
+  });
+
+  it("the Redis cache uses an expiring key and degrades to a miss on outage", async () => {
+    const store = new Map<string, unknown>();
+    const set = vi.fn(async (k: string, v: unknown) => (store.set(k, v), "OK"));
+    const client = { get: vi.fn(async (k: string) => store.get(k) ?? null), set };
+    const cache = createRedisLookupCache(client as never);
+    await cache.set("tp:yt:artist:X", { artistName: "X", outcome: { kind: "none" } }, 1000);
+    expect(set).toHaveBeenCalledWith("tp:yt:artist:X", expect.anything(), { px: 1000 });
+    expect(await cache.get("tp:yt:artist:X")).toEqual({ artistName: "X", outcome: { kind: "none" } });
+    const broken = createRedisLookupCache({ get: async () => { throw new Error("down"); }, set: async () => { throw new Error("down"); } } as never);
+    expect(await broken.get("k")).toBeNull();
+    await expect(broken.set("k", { artistName: "X", outcome: { kind: "none" } }, 1)).resolves.toBeUndefined();
   });
 });

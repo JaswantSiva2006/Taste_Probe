@@ -3,6 +3,7 @@ import type { MusicResolution, MusicResolveRequest } from "@/lib/contracts";
 import { loadAuthorizedArtist, type DiscoveryDeps } from "@/lib/discovery/service";
 import { rateLimitStoreFor } from "@/lib/reliability/rate-limit";
 import { logEvent } from "@/lib/telemetry/logger";
+import { cachedLookup, lookupCacheFor } from "./cache";
 import { resolveArtistVideo } from "./resolver";
 import { createQuotaGuard, createYouTubeDataLookup, type DynamicLookup, type DynamicOutcome } from "./youtube-data";
 
@@ -18,11 +19,11 @@ export type MusicDeps = { dynamic?: DynamicLookup; now?: () => Date };
 const INFLIGHT = new Map<string, Promise<DynamicOutcome>>();
 export function deduplicated(lookup: DynamicLookup): DynamicLookup {
   return {
-    lookup(name, explorationId) {
-      const key = `${explorationId}:${name}`;
+    lookup(artist, explorationId) {
+      const key = `${explorationId}:${artist.entityId}`;
       const running = INFLIGHT.get(key);
       if (running) return running;
-      const p = lookup.lookup(name, explorationId).finally(() => INFLIGHT.delete(key));
+      const p = lookup.lookup(artist, explorationId).finally(() => INFLIGHT.delete(key));
       INFLIGHT.set(key, p);
       return p;
     },
@@ -32,16 +33,20 @@ export function deduplicated(lookup: DynamicLookup): DynamicLookup {
 export function defaultDynamicLookup(deps: DiscoveryDeps): DynamicLookup | undefined {
   const { music, session } = deps.config;
   if (!music.youtubeApiKey) return undefined; // no key: Tier B disabled, zero cost
-  return deduplicated(
-    createYouTubeDataLookup({
-      apiKey: music.youtubeApiKey,
-      timeoutMs: music.timeoutMs,
-      quota: createQuotaGuard(rateLimitStoreFor(deps.config), {
-        dailySearchMax: music.dailySearchMax,
-        searchesPerExploration: music.searchesPerExploration,
-        explorationWindowMs: session.ttlSeconds * 1_000,
+  // Order: per-artist cache (free, stable video) → in-flight dedup → quota guard → Data API.
+  return cachedLookup(
+    deduplicated(
+      createYouTubeDataLookup({
+        apiKey: music.youtubeApiKey,
+        timeoutMs: music.timeoutMs,
+        quota: createQuotaGuard(rateLimitStoreFor(deps.config), {
+          dailySearchMax: music.dailySearchMax,
+          searchesPerExploration: music.searchesPerExploration,
+          explorationWindowMs: session.ttlSeconds * 1_000,
+        }),
       }),
-    }),
+    ),
+    lookupCacheFor(deps.config),
   );
 }
 

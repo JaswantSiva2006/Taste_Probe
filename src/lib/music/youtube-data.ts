@@ -18,14 +18,17 @@ import type { ResolvedVideo } from "@/lib/contracts";
  */
 
 export type DynamicOutcome =
-  | { kind: "resolved"; video: ResolvedVideo }
-  | { kind: "ambiguous"; reason: string }
-  | { kind: "none" }
+  | { kind: "resolved"; video: ResolvedVideo; cached?: boolean }
+  | { kind: "ambiguous"; reason: string; cached?: boolean }
+  | { kind: "none"; cached?: boolean }
   | { kind: "quota" }
   | { kind: "failed"; reason: string };
 
+/** The verified Qloo artist being looked up (the name is the search text; the ID keys caches). */
+export type LookupArtist = { entityId: string; name: string };
+
 export interface DynamicLookup {
-  lookup(artistName: string, explorationId: string): Promise<DynamicOutcome>;
+  lookup(artist: LookupArtist, explorationId: string): Promise<DynamicOutcome>;
 }
 
 const API = "https://www.googleapis.com/youtube/v3";
@@ -81,7 +84,7 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
   };
 
   return {
-    async lookup(artistName, explorationId) {
+    async lookup({ name: artistName }, explorationId) {
       if (!(await opts.quota.take(explorationId))) return { kind: "quota" };
       try {
         const search = await get<{ items?: SearchItem[] }>("search", {

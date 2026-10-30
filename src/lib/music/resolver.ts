@@ -94,14 +94,15 @@ export async function resolveArtistVideo(artist: ResolveArtist, opts: ResolveOpt
   if (artist.provenance !== "qloo") return outcome("UNAVAILABLE", "synthetic_artist", opts.dynamic ? "NOT_NEEDED" : "DISABLED_NO_KEY");
   if (!opts.dynamic) return outcome("UNAVAILABLE", "no_reviewed_mapping", "DISABLED_NO_KEY");
 
-  const found = await opts.dynamic.lookup(artist.name, opts.explorationId);
+  const found = await opts.dynamic.lookup({ entityId: artist.entityId, name: artist.name }, opts.explorationId);
+  const how = "cached" in found && found.cached ? "CACHED" : "USED";
   switch (found.kind) {
     case "resolved":
-      return { ...base, status: "RESOLVED", video: found.video, reason: null, dynamicLookup: "USED" };
+      return { ...base, status: "RESOLVED", video: found.video, reason: null, dynamicLookup: how };
     case "ambiguous":
-      return outcome("NEEDS_REVIEW", found.reason, "USED");
+      return outcome("NEEDS_REVIEW", found.reason, how);
     case "none":
-      return outcome("UNAVAILABLE", "no_match", "USED");
+      return outcome("UNAVAILABLE", "no_match", how);
     case "quota":
       return outcome("RATE_LIMITED", "youtube_quota_exhausted", "QUOTA_EXHAUSTED");
     case "failed":

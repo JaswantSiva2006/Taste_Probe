@@ -37,7 +37,8 @@
     "probe:live": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/probe-live.mjs",
     "probe:pivot": "vitest run --config scripts/vitest.pivot.config.mts scripts/probe-pivot.test.ts",
     "probe:cross-domain": "vitest run --config scripts/vitest.pivot.config.mts scripts/probe-cross-domain.test.ts",
-    "probe:adaptive": "vitest run --config scripts/vitest.pivot.config.mts scripts/probe-adaptive-retrieval.test.ts"
+    "probe:adaptive": "vitest run --config scripts/vitest.pivot.config.mts scripts/probe-adaptive-retrieval.test.ts",
+    "probe:youtube": "vitest run --config scripts/vitest.pivot.config.mts scripts/probe-youtube-dynamic.test.ts"
   },
   "dependencies": {
     "@upstash/redis": "1.39.0",

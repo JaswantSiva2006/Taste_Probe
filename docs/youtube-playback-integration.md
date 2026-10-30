@@ -113,7 +113,7 @@ Each registry entry carries `verifiedAt` and `evidence: ["oembed_200","iframe_pl
                     provenance: "human_curated", reviewedAt? } | null,
   fallback: { label, url: "https://www.youtube.com/results?search_query=…" },
   reason: string | null,          // e.g. no_reviewed_mapping, mapping_stale, synthetic_artist, artist_name_mismatch
-  dynamicLookup: "DISABLED_NO_KEY" | "NOT_NEEDED" | "USED" | "QUOTA_EXHAUSTED" | "FAILED",
+  dynamicLookup: "DISABLED_NO_KEY" | "NOT_NEEDED" | "USED" | "CACHED" | "QUOTA_EXHAUSTED" | "FAILED",
   checkedAt: ISO
 }
 ```
@@ -131,7 +131,41 @@ Each registry entry carries `verifiedAt` and `evidence: ["oembed_200","iframe_pl
 
 ## 5. Dynamic lookup availability, key and quota
 
-**Status: DISABLED.** `YOUTUBE_API_KEY` is **not configured** (checked by presence only; the value was never printed). `GOOGLE_API_KEY` belongs to Gemini and is never reused. With no key, Tier B is never constructed and makes no network calls (tested with a fetch spy).
+**Status: ENABLED whenever `YOUTUBE_API_KEY` is set.** The owner added a free-tier key to `.env`, which is git-ignored, after the first S9.9 commit; only its presence was checked, and the value was never printed. `GOOGLE_API_KEY` belongs to Gemini and is never reused. With no key, Tier B is never constructed and makes no network calls (tested with a fetch spy).
+
+**Live verification with the key** (`npm run probe:youtube`; YouTube only, no Qloo or Gemini). All four test artists are Qloo artists with no reviewed mapping.
+
+| Artist | Outcome |
+|---|---|
+| Danny Norbury | **RESOLVED** `bQY0q6mLyng` "Speak, Memory" (Danny Norbury - Topic, 337 s) |
+| Deaf Center | **RESOLVED** `i61WLyM3pZ0` "Open Upon" (Deaf Center - Topic, 394 s) |
+| Julia Kent | NEEDS_REVIEW: her uploads are on a channel named "Julia Kent", not a Topic channel |
+| Shawn Mendes | NEEDS_REVIEW: only VEVO results |
+
+Both resolved videos reached PLAYING in the official player, with the reported ID and channel matching.
+
+The server path (`PROBE_PART=service npm run probe:youtube`) runs `resolveMusic` with the real config wiring and a fake Qloo exploration:
+- **First lookup:** USED.
+- **Repeat for the same artist:** **CACHED**, same video, 0 requests.
+- **Two concurrent requests:** shared one lookup.
+- **Third artist:** RATE_LIMITED at the per-exploration cap (set to 2 for the probe), with no request sent.
+
+Total YouTube usage for these checks: 8 `search.list` and 6 `videos.list` (8 of the 100/day search bucket).
+
+**Per-artist cache** (`src/lib/music/cache.ts`). Search results are not stable: Deaf Center returned "Open Upon" once and `U00ks17rrCs` on a later call. So Tier B outcomes are cached by **Qloo artist ID**:
+
+| Outcome | Cached for |
+|---|---|
+| Resolved | 24 h |
+| NEEDS_REVIEW or none | 6 h |
+| Quota refusals, failures | Never |
+
+**How the cache behaves:**
+- **Order:** the cache is checked **before** the quota guard, so a hit costs nothing. The order is cache → in-flight dedup → quota guard → Data API.
+- **Visibility:** a hit is reported as `dynamicLookup: "CACHED"`.
+- **Stability:** the same artist keeps the same video across explorations, which S9.12 feedback validation relies on.
+- **Storage:** Redis in production (same instance as sessions), memory otherwise. A Redis outage degrades to a cache miss.
+- **Name check:** an entry whose stored artist name no longer matches the Qloo name is ignored.
 
 **Current Google quota** (Data API docs and Quota Calculator, checked 2026‑10‑30). The old "100 units per search" figure is outdated.
 - `search.list` costs **1 unit** in its own **Search Queries bucket, 100 calls/day** by default.
@@ -259,7 +293,7 @@ These are **unlistened placeholders with no musical claim**. A reviewer must lis
 **Metadata retention:**
 - The registry stores **stable references** (video ID, channel URL) alongside **check-time metadata** (title, channel, duration), with `verifiedAt`.
 - Entries older than **30 days** stop playing and fall back to NEEDS_REVIEW until they are re-checked with `npm run verify:mappings` (free).
-- If Tier B is enabled, its results are **not persisted**: they are returned per request with `verifiedAt` set to now.
+- Tier B results are kept only in the expiring per-artist cache (24 h for resolved, 6 h for negative outcomes), and `verifiedAt` records when YouTube was asked. Nothing API-derived is stored permanently.
 - The future Passport (S9.13) must store only `videoId`, the Qloo artist ID and name, and its own saved-at time. Title and channel should be re-read from the player or registry when shown, not kept indefinitely.
 
 ## 10. Browser tests and outcomes
@@ -267,7 +301,7 @@ These are **unlistened placeholders with no musical claim**. A reviewer must lis
 **Mock QA (`npm run qa`, free): 17/17 and 16/16, 0 problems.** The music journeys now render the listening room; with synthetic artists it shows the honest fallback. axe found no serious or critical issues.
 
 **Live QA (`npm run qa:music -- --confirm-live`, paid, Edge, production build, real Qloo, Gemini, Upstash and YouTube): 25/25.**
-- **Usage:** 3 Qloo and 1 Gemini per run. Two runs in total, so 6 Qloo and 2 Gemini (ledger 6/6 Qloo, 2/8 Gemini). 0 YouTube Data API calls.
+- **Usage:** 3 Qloo and 1 Gemini per run. Two runs in total, so 6 Qloo and 2 Gemini (ledger 6/6 Qloo, 2/8 Gemini). 0 YouTube Data API calls: the key was added later, and the journey's picks all have reviewed mappings, so they never need Tier B.
 - **The three artists:** Jóhannsson, Richter and Arnalds each had no autoplay (cued), one iframe, and user-triggered PLAYING with time advancing (about 2.5 s → 4.5 s). The reported ID and channel equalled the registry for each.
 - **Controls:** pause, resume, and replay from the start all worked.
 - **Switching:** switching artist while one was playing left one iframe, with the new video cued and not playing.
