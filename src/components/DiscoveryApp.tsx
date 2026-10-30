@@ -5,7 +5,10 @@ import { api, ApiClientError } from "@/lib/api-client";
 import type { ArtistIntent, DiscoveryView, EntitySummary, EntityType, ListeningAction, PreferenceResponse, ProviderMode } from "@/lib/contracts";
 import { isOfferedPair, sourceChoices, targetChoices } from "@/lib/ui/domains";
 import { createNameBook, friendlyError, type FriendlyError } from "@/lib/ui/presentation";
-import { Refresh, Reel } from "./Icons";
+import { passport, usePassport } from "@/lib/ui/passport-store";
+import { PassportIcon, Refresh, Reel } from "./Icons";
+import { ListeningStage } from "./music/ListeningStage";
+import { PassportView } from "./music/PassportView";
 import { Landing, type Capabilities } from "./Landing";
 import { Programme } from "./Programme";
 import { Workspace } from "./Workspace";
@@ -34,6 +37,9 @@ export function DiscoveryApp() {
   const [pending, setPending] = useState<Pending>(null);
   const [pendingResponse, setPendingResponse] = useState<PreferenceResponse | null>(null);
   const [error, setError] = useState<ShownError | null>(null);
+  /** S9.13: the Sound Passport is a separate screen; the exploration stays in memory behind it. */
+  const [screen, setScreen] = useState<"app" | "passport">("app");
+  const { items: passportItems } = usePassport();
   const names = useRef(createNameBook()).current;
   const errorRef = useRef<HTMLDivElement>(null);
   /** Synchronous in-flight guard: a second click can arrive before React re-renders the disabled buttons. */
@@ -72,8 +78,9 @@ export function DiscoveryApp() {
     // After "Not for me", focus the replacement START HERE instead of jumping to the page title.
     const afterReject = lastAction.current === "reject" && view.exploration?.status === "presenting";
     // A listening action keeps focus in the listening room (S9.12).
-    const afterListen = lastAction.current === "listen" && view.listening;
-    const id = view.status !== "finished" ? "tp-question" : afterListen ? "tp-listen-title" : afterReject ? "tp-start-label" : "tp-programme-title";
+    // Music results open on the Listening Stage (S9.13); reject keeps its S9.7 focus target.
+    const musicStage = view.targetType === "music_artist" && view.exploration?.status !== "accepted";
+    const id = view.status !== "finished" ? "tp-question" : afterReject ? "tp-start-label" : musicStage ? "tp-listen-title" : "tp-programme-title";
     (document.getElementById(id) ?? document.getElementById("tp-programme-title"))?.focus({ preventScroll: false });
   }, [view?.sessionId, view?.revision, view?.status, view]);
 
@@ -111,6 +118,8 @@ export function DiscoveryApp() {
 
   const accept = (v: DiscoveryView) => {
     names.remember(v);
+    // Only server-confirmed saves (exact verified artist + recording) enter the local Passport.
+    if (v.listening?.saved.length) passport.merge(v.listening.saved);
     setView(v);
   };
 
@@ -210,10 +219,10 @@ export function DiscoveryApp() {
   }
 
   /** S9.12: start or switch listening (server picks a verified recording). */
-  function listen(artistId?: string) {
+  function listen(artistId?: string, videoId?: string) {
     if (!view) return;
     const { sessionToken } = view;
-    const attempt = () => void run("listen", () => api.listen(sessionToken, artistId), accept, attempt);
+    const attempt = () => void run("listen", () => api.listen(sessionToken, artistId, videoId), accept, attempt);
     attempt();
   }
 
@@ -235,8 +244,31 @@ export function DiscoveryApp() {
     attempt();
   }
 
+  function openPassport() {
+    setScreen("passport");
+    requestAnimationFrame(() => document.getElementById("sp-passport-title")?.focus());
+  }
+
+  function closePassport() {
+    setScreen("app");
+    requestAnimationFrame(() => document.getElementById(view?.targetType === "music_artist" ? "tp-listen-title" : "tp-programme-title")?.focus());
+  }
+
+  /** S9.13 landing: "Start exploring" opens the music journey (Sound Passport). */
+  function startMusic() {
+    setScreen("app");
+    if (view) restart(true);
+    chooseTarget("music_artist");
+    requestAnimationFrame(() => {
+      const el = document.getElementById("tp-anchor") ?? document.querySelector<HTMLElement>(".tp-step--anchor");
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      el?.focus({ preventScroll: true });
+    });
+  }
+
   /** Back to the start: a new world (default) or the same world with a new anchor. */
   function restart(keepWorld = false) {
+    setScreen("app");
     setView(null);
     setError(null);
     setSelected(null);
@@ -272,6 +304,11 @@ export function DiscoveryApp() {
           <Reel size={22} />
           <span>TasteProbe</span>
         </button>
+        <button type="button" className="sp-navpass" onClick={screen === "passport" ? closePassport : openPassport} aria-pressed={screen === "passport"}>
+          <PassportIcon size={18} />
+          <span className="sp-navpass__label">Sound Passport</span>
+          <span className="sp-navpass__count" aria-label={`${passportItems.length} saved`}>{passportItems.length}</span>
+        </button>
         <span className="tp-top__mode">
           {mode === "live" ? "Live · Qloo + Gemini" : mode === "mock" ? "Mock mode" : capabilities.status === "error" ? "Offline" : "Connecting…"}
         </span>
@@ -302,7 +339,8 @@ export function DiscoveryApp() {
           </div>
         ) : null}
 
-        {phase === "landing" ? (
+        {screen === "passport" ? <PassportView onContinue={view ? closePassport : null} onStart={startMusic} /> : null}
+        {screen === "app" && phase === "landing" ? (
           <Landing
             mode={mode}
             capabilities={capabilities}
@@ -323,9 +361,12 @@ export function DiscoveryApp() {
             starting={pending === "start"}
             canStart={canStart}
             busy={busy}
+            onStartMusic={startMusic}
+            onOpenPassport={openPassport}
+            passportCount={passportItems.length}
           />
         ) : null}
-        {phase === "discovery" && view ? (
+        {screen === "app" && phase === "discovery" && view ? (
           <Workspace
             view={view}
             names={names}
@@ -336,7 +377,24 @@ export function DiscoveryApp() {
             onFinish={finish}
           />
         ) : null}
-        {phase === "finale" && view ? (
+        {screen === "app" && phase === "finale" && view && view.targetType === "music_artist" && view.exploration?.status !== "accepted" ? (
+          <ListeningStage
+            view={view}
+            busy={busy}
+            pending={pending === "listen"}
+            passportCount={passportItems.length}
+            onListen={listen}
+            onAction={listenAction}
+            onOpenPassport={openPassport}
+          />
+        ) : null}
+        {screen === "app" && phase === "finale" && view && view.targetType === "music_artist" && view.exploration?.status !== "accepted" ? (
+          <div className="sp-bridge">
+            <h2 className="sp-bridge__title">Every artist Qloo found from {view.seed.name}</h2>
+            <p>Listen to any of them, pick one as your starting point, set one aside, or refine with up to three new questions.</p>
+          </div>
+        ) : null}
+        {screen === "app" && phase === "finale" && view ? (
           <Programme
             view={view}
             names={names}
@@ -346,7 +404,6 @@ export function DiscoveryApp() {
             onAccept={acceptPick}
             onContinue={keepExploring}
             onListen={listen}
-            onListenAction={listenAction}
             onRestart={() => restart()}
             onNewAnchor={() => restart(true)}
           />

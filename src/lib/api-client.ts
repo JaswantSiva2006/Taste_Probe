@@ -73,8 +73,8 @@ export const api = {
     call("/api/discovery/continue", DiscoveryViewSchema, post({ sessionToken })),
   // S9.9: the server picks the video; the client only names an artist of this exploration.
   // S9.12 listening loop: each call is one signed, revision-checked transition (never retried automatically).
-  listen: (sessionToken: string, artistId?: string): Promise<WithMode<DiscoveryView>> =>
-    call("/api/discovery/listen", DiscoveryViewSchema, post(artistId ? { sessionToken, artistId } : { sessionToken })),
+  listen: (sessionToken: string, artistId?: string, videoId?: string): Promise<WithMode<DiscoveryView>> =>
+    call("/api/discovery/listen", DiscoveryViewSchema, post({ sessionToken, ...(artistId ? { artistId } : {}), ...(videoId ? { videoId } : {}) })),
   listeningFeedback: (sessionToken: string, artistId: string, videoId: string, action: ListeningAction, artistIntent?: ArtistIntent): Promise<WithMode<DiscoveryView>> =>
     call("/api/discovery/feedback", DiscoveryViewSchema, post({ sessionToken, artistId, videoId, action, ...(artistIntent ? { artistIntent } : {}) })),
   resolveMusic: (sessionToken: string, artistId: string): Promise<WithMode<MusicResolution>> =>

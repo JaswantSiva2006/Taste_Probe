@@ -1265,6 +1265,23 @@ export async function startListening(deps: DiscoveryDeps, input: ListenRequest):
       throw new AppError("ARTIST_NOT_IN_EXPLORATION", 403, "That artist is not part of this exploration");
     }
     const options = await songOptions(deps, state, artistId);
+    if (input.videoId) {
+      // "Previous": only a recording already heard in this exploration, still verified for this artist.
+      const heard = l.encounters.some((e) => e.artistId === artistId && e.videoId === input.videoId);
+      const option = options.find((o) => o.videoId === input.videoId);
+      if (!heard || !option) throw new AppError("LISTENING_STATE_CONFLICT", 409, "Only a recording you already heard here can be replayed");
+      return {
+        ...state,
+        listening: {
+          ...withNavigation(l, { action: "PREVIOUS", artistId, videoId: option.videoId, at: t.at, revision: t.revision }),
+          currentArtistId: artistId,
+          currentVideoId: option.videoId,
+          options,
+          selection: { mode: "USER_REPLAY", reasonCode: "replay_heard_recording", fallbackReason: null, eligibleCount: 1 },
+          notice: null,
+        },
+      };
+    }
     // An explicit choice of artist may replay a heard (never a disliked) recording.
     const reactions = trackReactions(l);
     const eligible = eligibleOptions(l, options, null);

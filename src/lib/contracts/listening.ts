@@ -21,7 +21,11 @@ const VideoId = z.string().regex(/^[A-Za-z0-9_-]{11}$/);
 const EntityId = z.string().min(1).max(200);
 const Token = z.string().min(1).max(4096);
 
-export const ListenRequestSchema = z.object({ sessionToken: Token, artistId: EntityId.optional() }).strict();
+/** S9.13: `videoId` (with `artistId`) replays a recording already heard in this exploration ("Previous"). */
+export const ListenRequestSchema = z
+  .object({ sessionToken: Token, artistId: EntityId.optional(), videoId: VideoId.optional() })
+  .strict()
+  .refine((r) => !r.videoId || r.artistId, { message: "videoId requires artistId" });
 export type ListenRequest = z.infer<typeof ListenRequestSchema>;
 
 export const ListeningFeedbackRequestSchema = z
@@ -48,7 +52,7 @@ export type VerifiedSongOption = z.infer<typeof VerifiedSongOptionSchema>;
 
 export const SongSelectionSchema = z.object({
   /** GEMINI: the model chose among verified IDs and the server validated it. */
-  mode: z.enum(["GEMINI", "DETERMINISTIC", "SINGLE_OPTION"]),
+  mode: z.enum(["GEMINI", "DETERMINISTIC", "SINGLE_OPTION", "USER_REPLAY"]),
   reasonCode: z.string().max(64),
   fallbackReason: z.string().max(64).nullable(),
   eligibleCount: z.number().int().nonnegative(),
@@ -80,10 +84,10 @@ export const ListeningStateSchema = z.object({
   notice: z.string().max(64).nullable(),
   visitedArtistIds: z.array(EntityId).max(100),
   unavailableArtistIds: z.array(EntityId).max(100),
-  encounters: z.array(z.object({ artistId: EntityId, artistName: z.string(), videoId: VideoId, title: z.string(), at, revision: rev, selection: z.enum(["GEMINI", "DETERMINISTIC", "SINGLE_OPTION"]) })).max(100),
+  encounters: z.array(z.object({ artistId: EntityId, artistName: z.string(), videoId: VideoId, title: z.string(), at, revision: rev, selection: z.enum(["GEMINI", "DETERMINISTIC", "SINGLE_OPTION", "USER_REPLAY"]) })).max(100),
   trackFeedback: z.array(z.object({ artistId: EntityId, videoId: VideoId, action: z.enum(["love", "not_for_me"]), at, revision: rev })).max(100),
   artistFeedback: z.array(z.object({ artistId: EntityId, action: z.enum(["like_artist", "not_this_artist"]), at, revision: rev })).max(100),
-  navigation: z.array(z.object({ action: z.enum(["NEXT", "ANOTHER_SONG", "DIFFERENT_ARTIST", "START"]), artistId: EntityId.nullable(), videoId: VideoId.nullable(), at, revision: rev })).max(200),
+  navigation: z.array(z.object({ action: z.enum(["NEXT", "ANOTHER_SONG", "DIFFERENT_ARTIST", "START", "PREVIOUS"]), artistId: EntityId.nullable(), videoId: VideoId.nullable(), at, revision: rev })).max(200),
   saved: z.array(SavedDiscoverySchema).max(50),
   geminiSongRequests: z.number().int().nonnegative(),
 });

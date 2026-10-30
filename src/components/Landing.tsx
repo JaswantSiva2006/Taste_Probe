@@ -4,8 +4,9 @@ import type { FormEvent } from "react";
 import type { EntitySummary, ProviderMode, PublicDomainPair } from "@/lib/contracts";
 import { lookOf, sourceChoices, targetChoices, withArticle } from "@/lib/ui/domains";
 import { DomainGlyph } from "./DomainGlyph";
-import { ArrowRight, Check, Refresh, Search, Shelf, Spark } from "./Icons";
+import { ArrowRight, Check, PassportIcon, Refresh, Search, Spark, Stamp } from "./Icons";
 import { ProjectorArt } from "./ProjectorArt";
+import { PassportHeroArt } from "./music/PassportHeroArt";
 
 export type Capabilities = { status: "loading" } | { status: "error" } | { status: "ready"; pairs: PublicDomainPair[] };
 
@@ -29,6 +30,10 @@ type Props = {
   starting: boolean;
   canStart: boolean;
   busy: boolean;
+  /** S9.13 Sound Passport entry points. */
+  onStartMusic: () => void;
+  onOpenPassport: () => void;
+  passportCount: number;
 };
 
 const joinOr = (items: string[]) => (items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} or ${items.at(-1)}`);
@@ -51,18 +56,75 @@ export function Landing(p: Props) {
       ? `Begin with ${p.selected.name}`
       : `Pick your ${source?.label ?? "anchor"} above`;
 
+  const musicOffered = targets.some((t) => t.domain === "music_artist");
   return (
     <>
-      <section className="tp-hero" aria-labelledby="tp-hero-title">
+      <section className="sp-hero" aria-labelledby="tp-hero-title">
+        <div className="sp-hero__copy">
+          <p className="sp-hero__eyebrow">
+            TasteProbe <span aria-hidden="true">/</span> Sound Passport
+          </p>
+          <h1 className="sp-hero__title" id="tp-hero-title" tabIndex={-1}>
+            Discover music <em>beyond your world.</em>
+          </h1>
+          <p className="sp-hero__lede">Start with something you love. Hear something you never knew you’d love.</p>
+          <p className="sp-hero__body">
+            Name a film you love. Qloo finds the music artists connected to it, and TasteProbe plays a real, verified recording of each through YouTube’s own player. Keep the ones that move you in your Sound Passport.
+          </p>
+          <div className="sp-hero__actions">
+            <button type="button" className="sp-btn sp-btn--primary sp-btn--lg" onClick={p.onStartMusic} disabled={p.busy || (p.capabilities.status === "ready" && !musicOffered)}>
+              Start exploring <ArrowRight size={18} />
+            </button>
+            <a className="sp-btn sp-btn--quiet sp-btn--lg" href="#tp-how">
+              How it works
+            </a>
+            <a className="sp-hero__other" href="#tp-plan">
+              Explore other cultures <ArrowRight size={14} />
+            </a>
+          </div>
+          {p.passportCount ? (
+            <button type="button" className="sp-hero__passport" onClick={p.onOpenPassport}>
+              <PassportIcon size={16} /> Your Sound Passport holds {p.passportCount} recording{p.passportCount === 1 ? "" : "s"}
+            </button>
+          ) : null}
+        </div>
+        <div className="sp-hero__art">
+          <PassportHeroArt />
+        </div>
+      </section>
+
+      <section className="tp-how sp-how" id="tp-how" aria-labelledby="tp-how-title">
+        <h2 className="tp-how__title" id="tp-how-title">
+          How it works
+        </h2>
+        <ol className="tp-how__steps">
+          <li>
+            <Spark size={28} />
+            <h3>Start somewhere familiar</h3>
+            <p>Pick the exact film you love from Qloo’s catalogue. Nothing is guessed, and one starting point is enough.</p>
+          </li>
+          <li>
+            <Search size={28} />
+            <h3>Hear something unexpected</h3>
+            <p>Qloo suggests connected artists. TasteProbe plays verified recordings you can love, pass on, or swap for another song or artist.</p>
+          </li>
+          <li>
+            <Stamp size={28} />
+            <h3>Keep what moves you</h3>
+            <p>Save the exact recordings you choose. Your Sound Passport stays on this device: no account, no playlist.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section className="tp-hero tp-plan" id="tp-plan" aria-labelledby="tp-plan-title">
         <div className="tp-hero__copy">
-          <p className="tp-hero__kicker">Your gateway to something new.</p>
-          <h1 className="tp-hero__title" id="tp-hero-title">
+          <p className="tp-hero__kicker">Choose your journey</p>
+          <h2 className="tp-hero__title tp-plan__title" id="tp-plan-title">
             Love something?
             <em>Discover what comes next.</em>
-          </h1>
+          </h2>
           <p className="tp-hero__lede">
-            Choose a cultural world you want to explore and something you already love. TasteProbe asks Qloo where your taste
-            leads, asks up to three sharp questions, and hands you one grounded place to start.
+            Listen your way into music artists, or explore other cultures: choose a world, pick something you already love, and TasteProbe asks Qloo where your taste leads, with up to three sharp questions along the way.
           </p>
 
           <form className="tp-journey" onSubmit={submit} aria-label="Plan your exploration">
@@ -246,28 +308,6 @@ export function Landing(p: Props) {
         </div>
       </section>
 
-      <section className="tp-how" aria-labelledby="tp-how-title">
-        <h2 className="tp-how__title" id="tp-how-title">
-          How an exploration works
-        </h2>
-        <ol className="tp-how__steps">
-          <li>
-            <Spark size={28} />
-            <h3>A world and an anchor</h3>
-            <p>Choose where you want to go, then pick the exact thing you already love, so nothing is guessed.</p>
-          </li>
-          <li>
-            <Search size={28} />
-            <h3>Up to three questions</h3>
-            <p>Each is chosen because your answer could reorder what Qloo found. Skip any you’re unsure about.</p>
-          </li>
-          <li>
-            <Shelf size={28} />
-            <h3>Your way in</h3>
-            <p>One place to start, with where to go next, each explained only by what Qloo and you actually said.</p>
-          </li>
-        </ol>
-      </section>
     </>
   );
 }

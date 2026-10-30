@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import type { FeaturedMoment, ResolvedVideo } from "@/lib/contracts";
 
 /**
@@ -88,9 +88,18 @@ type Props = {
   moment: FeaturedMoment | null;
   fallbackUrl: string;
   fallbackLabel: string;
+  /** S9.13: the stage renders its own transport outside the embed; the frame and fallback stay. */
+  bare?: boolean;
+  /** S9.13: real player phase changes (from the IFrame API), e.g. to drive the vinyl. */
+  onPhase?: (phase: PlayerPhase) => void;
+  /** S9.13: supported IFrame API controls for an external transport. */
+  controlsRef?: Ref<PlayerHandle>;
 };
 
-export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbackLabel }: Props) {
+/** External transport. Every method is a supported YouTube IFrame Player API call. */
+export type PlayerHandle = { toggle(): void; replay(): void; rewind(seconds: number): void };
+
+export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbackLabel, bare = false, onPhase, controlsRef }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
@@ -190,6 +199,10 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    onPhase?.(phase);
+  }, [phase, onPhase]);
+
   // Publishes the playback position for tests and assistive diagnostics (no re-render).
   useEffect(() => {
     if (phase !== "playing") return;
@@ -220,6 +233,16 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
     else if (phase === "paused") p.playVideo();
     else start("full");
   };
+
+  useImperativeHandle(controlsRef, () => ({
+    toggle: togglePlay,
+    replay: () => start(modeRef.current),
+    rewind: (seconds: number) => {
+      const p = playerRef.current;
+      if (!p || (phase !== "playing" && phase !== "paused" && phase !== "buffering")) return;
+      p.seekTo(Math.max(0, p.getCurrentTime() - seconds), true);
+    },
+  }));
 
   const ready = phase !== "loading" && phase !== "failed";
   const playing = phase === "playing" || phase === "buffering";
@@ -265,6 +288,8 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
       <div className="tp-player__frame" hidden={phase === "failed"}>
         <div ref={hostRef} className="tp-player__host" />
       </div>
+      {bare ? null : (
+      <>
       <p className="tp-player__credit">
         <span className="tp-player__track">{video.title}</span>
         <span className="tp-player__channel">
@@ -290,7 +315,9 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
       {moment && momentOk && moment.status === "PENDING_REVIEW" ? (
         <p className="tp-player__review">Review mode: this moment has not been approved by a listener and is never shown to the public.</p>
       ) : null}
-      <p className="tp-player__status" role="status" aria-live="polite">
+      </>
+      )}
+      <p className={bare ? "tp-sr" : "tp-player__status"} role="status" aria-live="polite">
         {notice ?? status}
       </p>
     </div>

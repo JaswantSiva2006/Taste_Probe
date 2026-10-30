@@ -101,3 +101,89 @@ export const Spark = (p: IconProps) => (
     <path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4M6.6 6.6l2.2 2.2M15.2 15.2l2.2 2.2M17.4 6.6l-2.2 2.2M8.8 15.2l-2.2 2.2" />
   </Base>
 );
+
+/* ---------------------------------------------------------------- S9.13 listening set (same 1.5px family) */
+export const Play = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M8 5.5v13l10.5-6.5L8 5.5z" fill="currentColor" stroke="none" />
+  </Base>
+);
+export const Pause = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="6.5" y="5.5" width="3.6" height="13" rx="1" fill="currentColor" stroke="none" />
+    <rect x="13.9" y="5.5" width="3.6" height="13" rx="1" fill="currentColor" stroke="none" />
+  </Base>
+);
+export const Rewind10 = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4.5 12a7.5 7.5 0 1 0 2.3-5.4" />
+    <path d="M4.5 4.5v3.6h3.6" />
+    <text x="12.2" y="15.2" fontSize="6.6" fontFamily="inherit" fontWeight="600" textAnchor="middle" fill="currentColor" stroke="none">10</text>
+  </Base>
+);
+export const SkipBack = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M17.5 6v12L9 12l8.5-6z" />
+    <path d="M6.5 6v12" />
+  </Base>
+);
+export const SkipForward = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M6.5 6v12L15 12 6.5 6z" />
+    <path d="M17.5 6v12" />
+  </Base>
+);
+export const Replay = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M5 12a7 7 0 1 0 2.05-4.95" />
+    <path d="M5 5v4h4" />
+    <path d="M10.6 9.6v4.8l3.8-2.4-3.8-2.4z" fill="currentColor" stroke="none" />
+  </Base>
+);
+export const Heart = ({ filled = false, ...p }: IconProps & { filled?: boolean }) => (
+  <Base {...p}>
+    <path d="M12 19.5s-7-4.3-7-9.3A4 4 0 0 1 12 7.6a4 4 0 0 1 7 2.6c0 5-7 9.3-7 9.3z" fill={filled ? "currentColor" : "none"} />
+  </Base>
+);
+export const NotForMe = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="7.5" />
+    <path d="M8.5 12h7" />
+  </Base>
+);
+export const Stamp = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M9.5 4.5h5l-1 6h-3l-1-6z" />
+    <path d="M5 13.5h14v3H5z" />
+    <path d="M7 19.5h10" />
+  </Base>
+);
+export const AnotherSong = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M9 17.5V6.5l8-1.5v9" />
+    <circle cx="7" cy="17.5" r="2" />
+    <circle cx="15" cy="14" r="2" />
+    <path d="M19.5 18.5l2-2-2-2" />
+  </Base>
+);
+export const DifferentArtist = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="8.5" cy="8.5" r="3" />
+    <path d="M3.5 19c.6-3 2.6-4.7 5-4.7s4.4 1.7 5 4.7" />
+    <path d="M15 8h6M18.5 5.5 21 8l-2.5 2.5" />
+  </Base>
+);
+export const ExternalLink = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M13.5 5.5h5v5M18.5 5.5l-7 7" />
+    <path d="M16.5 13.5v4a1.5 1.5 0 0 1-1.5 1.5H7a1.5 1.5 0 0 1-1.5-1.5V9.5A1.5 1.5 0 0 1 7 8h4" />
+  </Base>
+);
+export const PassportIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="5.5" y="3.5" width="13" height="17" rx="1.6" />
+    <circle cx="12" cy="11" r="3.2" />
+    <circle cx="12" cy="11" r="0.6" fill="currentColor" />
+    <path d="M9 17h6" />
+  </Base>
+);

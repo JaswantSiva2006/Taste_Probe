@@ -21,6 +21,7 @@
     "smoke:multi-round": "node scripts/smoke-multi-round.mjs",
     "smoke:listening": "vitest run tests/integration/listening-journey.test.ts --reporter=verbose",
     "qa:ui": "node scripts/ui-qa.mjs",
+    "qa:passport": "node scripts/ui-qa-passport.mjs",
     "qa": "node scripts/qa.mjs",
     "qa:live": "node scripts/qa-live.mjs",
     "qa:adaptive-live": "node scripts/qa-adaptive-live.mjs",

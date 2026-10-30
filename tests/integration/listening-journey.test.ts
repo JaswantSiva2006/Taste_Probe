@@ -273,6 +273,18 @@ describe("S9.12 listening journey over HTTP", () => {
     expect(v4.listening!.history).toHaveLength(2);
   });
 
+  it("S9.13 Previous: only a recording already heard here can be replayed (server-authorized)", async () => {
+    const v1 = await ok(await listen(await explore(), A.johann));
+    const first = v1.listening!.video!.videoId;
+    const v2 = await ok(await act(v1, "ANOTHER_SONG"));
+    const back = await ok(await listenRoute(post("/discovery/listen", { sessionToken: v2.sessionToken, artistId: A.johann, videoId: first })));
+    expect(back.listening).toMatchObject({ video: { videoId: first }, selection: { mode: "USER_REPLAY" } });
+    expect(back.listening!.history).toHaveLength(2); // a replay is not a new encounter
+    const unheard = ["aXlx-YnvgKU", "mPvqle7mF-U", "dCWbVxfkoKg"].find((id) => !back.listening!.history.some((h) => h.videoId === id))!;
+    await fail(await listenRoute(post("/discovery/listen", { sessionToken: back.sessionToken, artistId: A.johann, videoId: unheard })), 409, "LISTENING_STATE_CONFLICT");
+    await fail(await listenRoute(post("/discovery/listen", { sessionToken: back.sessionToken, videoId: first })), 400, "VALIDATION_ERROR");
+  });
+
   it("two concurrent actions on the same revision: exactly one commits", async () => {
     const v1 = await ok(await listen(await explore(), A.johann));
     const results = await Promise.all([act(v1, "NEXT"), act(v1, "NEXT"), act(v1, "SAVE")]);
