@@ -54,7 +54,7 @@ export type CulturalDomain = z.infer<typeof CulturalDomainSchema>;
 const domain = (d: DomainDefinition) => Object.freeze(d);
 
 // Evidence notes: S2 (movie Search, book Insights), S9.1 (artist Search), S9.3 live
-// campaign 2026-10-29 (artist Insights; TV/game/podcast Search + Insights). See docs/cross-domain-engine.md.
+// campaign 2026-10-29 (artist Insights; TV/game/podcast Search + Insights). See docs/development/cross-domain-engine.md.
 export const DOMAINS: Readonly<Record<CulturalDomain, DomainDefinition>> = Object.freeze({
   movie: domain({
     qlooType: "urn:entity:movie", noun: "movie", plural: "movies", verb: "watch", narrative: true,

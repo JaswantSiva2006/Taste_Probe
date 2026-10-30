@@ -4,7 +4,7 @@ import type { FeaturedMomentEntry, ReviewedMapping, ReviewedVideo } from "./type
  * S9.9 reviewed artist → YouTube video registry (Tier A).
  *
  * Qloo IDs and names are exactly as returned by Qloo for "Interstellar → artists"
- * in the S9.8 live probe (docs/sound-passport-feasibility.md §8–§9). Video titles and
+ * in the S9.8 live probe (docs/development/sound-passport-feasibility.md §8–§9). Video titles and
  * channels are exactly as reported by YouTube oEmbed and by the IFrame player in the
  * mapping audit (scripts/verify-music-mappings.mjs). A mapping is accepted only when
  * the channel is the artist's Topic or VEVO channel or a named label's channel; a

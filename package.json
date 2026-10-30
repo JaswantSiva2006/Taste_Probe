@@ -2,7 +2,8 @@
   "name": "taste-probe",
   "version": "0.1.0",
   "private": true,
-  "description": "TasteProbe: adaptive, Qloo-grounded cultural discovery (S1 walking skeleton, mock mode).",
+  "description": "TasteProbe — Sound Passport: discover music from the films, artists, shows, games and podcasts you love, with Qloo, Gemini and verified YouTube playback.",
+  "license": "MIT",
   "engines": {
     "node": ">=22.12.0"
   },

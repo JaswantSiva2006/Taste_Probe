@@ -31,7 +31,7 @@ import { testConfig } from "../helpers";
  *
  * THIS PROVES ENGINE BEHAVIOUR ONLY. It is not evidence that Qloo returns
  * useful results for any pair; live coverage is recorded separately in
- * docs/cross-domain-engine.md.
+ * docs/development/cross-domain-engine.md.
  */
 
 const SIX = Object.keys(DOMAINS) as CulturalDomain[];

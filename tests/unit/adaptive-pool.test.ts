@@ -14,9 +14,10 @@ const candidate = (n: number, tags = [`tag:${n % 4}`]): RecommendationCandidate 
 });
 
 describe("adaptive candidate-pool foundation", () => {
-  it("is disabled by default and explicitly opt-in", () => {
+  it("is on by default (taste walk) and can be switched off explicitly", () => {
     const base = { NODE_ENV: "test", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: "x".repeat(32) };
-    expect(loadConfig(base).features.adaptivePool).toBe(false);
+    expect(loadConfig(base).features.adaptivePool).toBe(true);
+    expect(loadConfig({ ...base, ADAPTIVE_POOL_ENABLED: "false" }).features.adaptivePool).toBe(false);
     expect(loadConfig({ ...base, ADAPTIVE_POOL_ENABLED: "true" }).features.adaptivePool).toBe(true);
   });
 

@@ -52,6 +52,8 @@ const EnvSchema = z.object({
   RATE_LIMIT_START_MAX: int(10, 1, 100),
   RATE_LIMIT_ANSWER_MAX: int(30, 1, 300),
   RATE_LIMIT_RESOLVE_MAX: int(60, 1, 600),
+  // Listening actions (Love / Not for me / Next / Save …) are frequent; they get their own, larger bucket.
+  RATE_LIMIT_FEEDBACK_MAX: int(240, 1, 2000),
   RATE_LIMIT_WINDOW_SECONDS: int(600, 10, 86_400),
   TRUSTED_PROXY_IP_HEADER: optionalString,
   ENABLE_EXPENSIVE_OPERATIONS: bool(true),
@@ -90,7 +92,8 @@ const EnvSchema = z.object({
   YOUTUBE_SEARCHES_PER_EXPLORATION: int(6, 0, 30),
   // Exposes PENDING_REVIEW featured-moment candidates, labelled as unreviewed, for human review. Refused in production.
   MUSIC_MOMENT_REVIEW: bool(false),
-  ADAPTIVE_POOL_ENABLED: bool(false),
+  // Adaptive reservoir + taste-graph walk (bounded by MAX_QLOO_WALK_CALLS; set that to 0 to stop walk spend).
+  ADAPTIVE_POOL_ENABLED: bool(true),
   // S9.17: on by default — it is what learns from reactions and listening time. Set false to roll back.
   ADAPTIVE_LISTENING_ENABLED: bool(true),
   // S9.15: legacy non-music journeys (internal regression only). Refused in production.
@@ -110,6 +113,7 @@ export type AppConfig = {
     startMax: number;
     answerMax: number;
     resolveMax: number;
+    feedbackMax: number;
     windowSeconds: number;
     trustedProxyIpHeader?: string;
   };
@@ -293,6 +297,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       startMax: e.RATE_LIMIT_START_MAX,
       answerMax: e.RATE_LIMIT_ANSWER_MAX,
       resolveMax: e.RATE_LIMIT_RESOLVE_MAX,
+      feedbackMax: e.RATE_LIMIT_FEEDBACK_MAX,
       windowSeconds: e.RATE_LIMIT_WINDOW_SECONDS,
       trustedProxyIpHeader: e.TRUSTED_PROXY_IP_HEADER,
     },

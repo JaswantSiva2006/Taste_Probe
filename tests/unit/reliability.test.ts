@@ -22,6 +22,17 @@ describe("anonymous production rate limiting", () => {
     });
   });
 
+  it("listening feedback has its own, larger bucket that does not consume the listen/resolve allowance", async () => {
+    const store = createMemoryRateLimitStore();
+    const cfg = config({ RATE_LIMIT_RESOLVE_MAX: "2", RATE_LIMIT_FEEDBACK_MAX: "5" });
+    expect(config().rateLimit.feedbackMax).toBe(240);
+    for (let i = 0; i < 5; i++) await enforceRateLimit(request(), cfg, "feedback", { store, now: 3_000 + i });
+    await expect(enforceRateLimit(request(), cfg, "feedback", { store, now: 3_010 })).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    await enforceRateLimit(request(), cfg, "listen", { store, now: 3_011 });
+    await enforceRateLimit(request(), cfg, "listen", { store, now: 3_012 });
+    await expect(enforceRateLimit(request(), cfg, "listen", { store, now: 3_013 })).rejects.toMatchObject({ code: "RATE_LIMITED" });
+  });
+
   it("atomically limits concurrent requests", async () => {
     const store = createMemoryRateLimitStore();
     const cfg = config({ RATE_LIMIT_START_MAX: "3" });
