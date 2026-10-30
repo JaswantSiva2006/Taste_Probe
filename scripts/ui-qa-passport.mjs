@@ -338,7 +338,7 @@ try {
     // unavailable artist (no verified recording) via the programme's Listen button
     await page.getByRole("button", { name: "Listen: Shawn Mendes" }).click();
     await settle(page);
-    check("unmapped artist: truthful no-recording state", /No verified recording for Shawn Mendes yet/.test(await page.textContent("#tp-listen-title")));
+    check("unmapped artist: truthful no-recording state", /We couldn’t verify a recording for Shawn Mendes/.test(await page.textContent("#tp-listen-title")));
     await page.locator("#tp-listen-title").scrollIntoViewIfNeeded();
     await shot(page, "1440-13-no-recording");
     await click(page, "Try the next artist");

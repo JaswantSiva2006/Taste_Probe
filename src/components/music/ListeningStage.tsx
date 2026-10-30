@@ -206,16 +206,16 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
           <VinylDisc state="failed" seed={l.artist?.entityId ?? "none"} artist={l.artist?.name ?? "—"} size="sm" tonearm={false} />
           <div>
             <h2 className="sp-empty__title" id="tp-listen-title" tabIndex={-1}>
-              No verified recording for {l.artist?.name ?? "this artist"} yet
+              We couldn’t verify a recording for {l.artist?.name ?? "this artist"}
             </h2>
-            <p>The recommendation still stands: Qloo suggested this artist. TasteProbe only plays recordings it has checked are really theirs.</p>
+            <p>This doesn’t mean their music is unavailable. We couldn’t confirm a playable YouTube recording belongs to this artist. Try another artist here, or look for their music on YouTube.</p>
             <div className="sp-intro__actions">
               <button type="button" className="sp-btn sp-btn--primary" disabled={busy} onClick={() => onListen()}>
                 <DifferentArtist size={18} /> Try the next artist
               </button>
               {l.artist ? (
                 <a className="sp-btn sp-btn--quiet" href={searchUrl(l.artist.name)} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink size={16} /> Search YouTube yourself
+                  <ExternalLink size={16} /> Find their music on YouTube
                 </a>
               ) : null}
             </div>
