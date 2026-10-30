@@ -16,10 +16,10 @@ ledger.qloo += 3; ledger.recoveryReserved = true;
 await writeFile(path, JSON.stringify(ledger, null, 2));
 const port = await new Promise((done) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => done(p)); }); });
 const child = spawn(process.execPath, [require.resolve("next/dist/bin/next"), "start", "--port", String(port), "--hostname", "127.0.0.1"], {
-  env: { ...process.env, NODE_ENV: "production", QLOO_MODE: "live", SESSION_STORE: "redis", ADAPTIVE_POOL_ENABLED: "true", MAX_QLOO_CALLS_PER_SESSION: "1", MAX_GEMINI_REQUESTS_PER_EXPLORATION: "8", YOUTUBE_API_KEY: "", NEXT_TELEMETRY_DISABLED: "1" },
+  env: { ...process.env, NODE_ENV: "production", QLOO_MODE: "live", SESSION_STORE: "redis", ADAPTIVE_POOL_ENABLED: "true", MAX_QLOO_CALLS_PER_SESSION: "1", MAX_GEMINI_REQUESTS_PER_EXPLORATION: "8", YOUTUBE_API_KEY: "", YOUTUBE_API_KEY_2: "", YOUTUBE_API_KEY_3: "", NEXT_TELEMETRY_DISABLED: "1" },
   stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
 });
-const secretValues = ["QLOO_API_KEY", "GOOGLE_API_KEY", "YOUTUBE_API_KEY", "UPSTASH_REDIS_REST_TOKEN", "UPSTASH_REDIS_REST_URL", "SESSION_SIGNING_SECRET"].map((k) => process.env[k]).filter(Boolean);
+const secretValues = ["QLOO_API_KEY", "GOOGLE_API_KEY", "YOUTUBE_API_KEY", "YOUTUBE_API_KEY_2", "YOUTUBE_API_KEY_3", "UPSTASH_REDIS_REST_TOKEN", "UPSTASH_REDIS_REST_URL", "SESSION_SIGNING_SECRET"].map((k) => process.env[k]).filter(Boolean);
 const clean = (value) => secretValues.reduce((text, secret) => text.split(secret).join("[REDACTED]"), String(value));
 const events = []; let buffer = "";
 for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { buffer += clean(chunk); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { try { const e = JSON.parse(line); if (e.event) events.push(e); } catch {} } });

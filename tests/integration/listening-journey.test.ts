@@ -152,7 +152,7 @@ beforeEach(() => {
   fixture.groundedMoments = false;
   for (const [k, val] of Object.entries({
     NODE_ENV: "test", QLOO_MODE: "live", QLOO_API_KEY: "qloo-test-key", QLOO_BASE_URL: "https://qloo.test",
-    LLM_PROVIDER: "google", LLM_MODEL: "gemini-3.5-flash-lite", GOOGLE_API_KEY: "gemini-test-key", YOUTUBE_API_KEY: "",
+    LLM_PROVIDER: "google", LLM_MODEL: "gemini-3.5-flash-lite", GOOGLE_API_KEY: "gemini-test-key", YOUTUBE_API_KEY: "", YOUTUBE_API_KEY_2: "", YOUTUBE_API_KEY_3: "",
     SESSION_STORE: "memory", SESSION_SIGNING_SECRET: newTestSecret(), RATE_LIMIT_ENABLED: "false", ADAPTIVE_POOL_ENABLED: "false", ADAPTIVE_LISTENING_ENABLED: "false",
   })) vi.stubEnv(k, val);
   stubFetch();

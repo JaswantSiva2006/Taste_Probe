@@ -1,5 +1,17 @@
 # Release handoff
 
+## YouTube key failover
+
+**Failover keys:** `YOUTUBE_API_KEY_2` and `YOUTUBE_API_KEY_3` are optional. Keys are tried in order; on a quota or key error (401/403/429, or a 400 naming an invalid key), the same request moves to the next key. A spent key is set aside for 1 hour (6 hours if invalid), per instance, keyed by hash. One logical search still counts once against our caps.
+
+**Capacity:** quota is per Google Cloud project, so each key must come from a different project or account.
+
+**Limits:**
+- `YOUTUBE_SEARCHES_PER_EXPLORATION` now allows up to 30 (`.env.example` uses 12).
+- `YOUTUBE_DAILY_SEARCH_MAX` allows up to 300; set it to about 90 × the number of keys.
+
+**QA and audits:** QA scripts blank all three keys, and the secret audits check all three.
+
 ## S9.18 taste-graph walk
 
 See [taste-walk.md](taste-walk.md).

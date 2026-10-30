@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { RateLimitStore } from "@/lib/reliability/rate-limit";
 import { isVideoId, watchUrl } from "./types";
 import type { ResolvedVideo } from "@/lib/contracts";
@@ -258,18 +259,41 @@ function verifyFor(artist: LookupArtist, items: SearchItem[], videos: VideoItem[
 
 const resolvedFrom = (accepted: Verified[]): DynamicOutcome => ({ kind: "resolved", video: accepted[0]!.video, alternates: accepted.slice(1).map((v) => v.video) });
 
-export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: number; quota: QuotaGuard; fetcher?: typeof fetch; now?: () => Date }): DynamicLookup {
+/**
+ * S9.18 key failover. Keys are tried in order; a key that answers with a quota or key
+ * error (401/403/429, or a 400 naming an invalid key) is set aside and the same request
+ * is retried once with the next key. Set-aside state is per server instance and keyed by
+ * a hash, never the key itself: quota errors cool down for an hour, invalid keys for six.
+ * A logical search still counts once against our own caps, however many keys it needed.
+ */
+const KEY_COOLDOWN = new Map<string, number>();
+const keyRef = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 16);
+export const resetYouTubeKeyCooldowns = () => KEY_COOLDOWN.clear();
+
+export function createYouTubeDataLookup(opts: { apiKey?: string; apiKeys?: string[]; timeoutMs: number; quota: QuotaGuard; fetcher?: typeof fetch; now?: () => Date }): DynamicLookup {
+  const keys = [...new Set([...(opts.apiKeys ?? []), ...(opts.apiKey ? [opts.apiKey] : [])].filter(Boolean))];
+  const clock = () => (opts.now?.() ?? new Date()).getTime();
   const fetcher = opts.fetcher ?? fetch;
   const get = async <T>(path: string, params: Record<string, string>): Promise<T> => {
-    // The key travels in a header, never in a URL that could be logged.
-    const res = await fetcher(`${API}/${path}?${new URLSearchParams(params)}`, {
-      headers: { "x-goog-api-key": opts.apiKey, accept: "application/json" },
-      signal: AbortSignal.timeout(opts.timeoutMs),
-      cache: "no-store",
-    });
-    if (res.status === 403 || res.status === 429) throw Object.assign(new Error("quota"), { quota: true });
-    if (!res.ok) throw new Error(`youtube_http_${res.status}`);
-    return (await res.json()) as T;
+    const now = clock();
+    const usable = keys.filter((k) => (KEY_COOLDOWN.get(keyRef(k)) ?? 0) <= now);
+    for (const key of usable) {
+      // The key travels in a header, never in a URL that could be logged.
+      const res = await fetcher(`${API}/${path}?${new URLSearchParams(params)}`, {
+        headers: { "x-goog-api-key": key, accept: "application/json" },
+        signal: AbortSignal.timeout(opts.timeoutMs),
+        cache: "no-store",
+      });
+      if (res.ok) return (await res.json()) as T;
+      const text = res.status === 400 ? await res.text().catch(() => "") : "";
+      const invalidKey = res.status === 401 || /API_KEY_INVALID|keyInvalid|API key not valid/i.test(text);
+      if (res.status === 403 || res.status === 429 || invalidKey) {
+        KEY_COOLDOWN.set(keyRef(key), now + (invalidKey ? 6 : 1) * 3_600_000);
+        continue; // same request, next key
+      }
+      throw new Error(`youtube_http_${res.status}`);
+    }
+    throw Object.assign(new Error("quota"), { quota: true });
   };
   /** One search (quota-counted) plus one videos.list for every returned ID (general bucket, 1 unit). */
   const searchAndFetch = async (q: string, maxResults: number) => {

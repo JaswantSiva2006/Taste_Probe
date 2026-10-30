@@ -34,7 +34,7 @@ const OUT = resolve(".artifacts/s9-12-live");
 const LEDGER = resolve(OUT, "ledger.json");
 const ARTIST = { id: "5AD69C26-F5C4-482F-9C8B-E3B7432F2FDC", name: "Jóhann Jóhannsson", videos: ["aXlx-YnvgKU", "mPvqle7mF-U", "dCWbVxfkoKg"] };
 
-const secrets = ["QLOO_API_KEY", "GOOGLE_API_KEY", "YOUTUBE_API_KEY", "UPSTASH_REDIS_REST_TOKEN", "SESSION_SIGNING_SECRET", "UPSTASH_REDIS_REST_URL"]
+const secrets = ["QLOO_API_KEY", "GOOGLE_API_KEY", "YOUTUBE_API_KEY", "YOUTUBE_API_KEY_2", "YOUTUBE_API_KEY_3", "UPSTASH_REDIS_REST_TOKEN", "SESSION_SIGNING_SECRET", "UPSTASH_REDIS_REST_URL"]
   .map((k) => process.env[k])
   .filter((v) => v && v.length >= 8);
 const redact = (v) => secrets.reduce((t, s) => t.split(s).join("[REDACTED]"), String(v)).replace(/v\d\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[SESSION_TOKEN]");

@@ -1,14 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MusicResolutionSchema } from "@/lib/contracts";
 import { REVIEWED_MAPPINGS, reviewedMappingFor } from "@/lib/music/mappings";
 import { resolveArtistVideo, selectMoment, type ResolveOptions } from "@/lib/music/resolver";
 import { deduplicated } from "@/lib/music/service";
 import { QLOO_ENTITY_ID, YOUTUBE_VIDEO_ID, momentWithinBounds, searchUrl, watchUrl, type ReviewedMapping } from "@/lib/music/types";
-import { corroborates, createQuotaGuard, createYouTubeDataLookup, creditsArtist, matchRecording, nameKey, parseIsoDuration, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
+import { corroborates, createQuotaGuard, createYouTubeDataLookup, creditsArtist, matchRecording, nameKey, parseIsoDuration, resetYouTubeKeyCooldowns, type DynamicLookup, type QuotaGuard } from "@/lib/music/youtube-data";
 import { createMemoryRateLimitStore } from "@/lib/reliability/rate-limit";
 import { NEGATIVE_TTL_MS, RESOLVED_TTL_MS, RESOLVER_POLICY_VERSION, cachedLookup, createMemoryLookupCache, createRedisLookupCache, lookupCacheKey } from "@/lib/music/cache";
 
 /** S9.9 resolver, registry and optional Data API tier. Offline: no YouTube, Qloo or Gemini calls. */
+
+// Key cooldowns are module-wide (per server instance); every test starts with all keys usable.
+beforeEach(() => resetYouTubeKeyCooldowns());
 
 const JOHANN = { entityId: "5AD69C26-F5C4-482F-9C8B-E3B7432F2FDC", name: "Jóhann Jóhannsson", provenance: "qloo" as const };
 const NOW = new Date("2026-10-30T12:00:00Z");
@@ -297,6 +300,7 @@ describe("optional YouTube Data API tier", () => {
     expect(await resolveArtistVideo(unknown, opts({ dynamic: createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: empty.fetcher }) }))).toMatchObject({ status: "UNAVAILABLE", reason: "no_match" });
     const quota = fakeFetch(jsonRes({ error: { code: 403 } }, 403));
     expect(await resolveArtistVideo(unknown, opts({ dynamic: createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher: quota.fetcher }) }))).toMatchObject({ status: "RATE_LIMITED", dynamicLookup: "QUOTA_EXHAUSTED" });
+    resetYouTubeKeyCooldowns(); // the 403 set "k" aside; the next step is about an ordinary network failure
     const broken = (async () => {
       throw new TypeError("fetch failed");
     }) as unknown as typeof fetch;
@@ -421,6 +425,40 @@ describe("optional YouTube Data API tier", () => {
     expect(out[unknown.entityId]).toMatchObject({ kind: "resolved" });
     expect(out[other.entityId]).toMatchObject({ kind: "resolved", video: { videoId: "BBBBBBBBBBB", channelKind: "credited_upload" } });
     expect(out[absent.entityId]).toBeUndefined(); // harvest is positive-only, never a negative
+  });
+
+  it("S9.18: key failover — a quota-exhausted key hands the same request to the next key, and stays set aside", async () => {
+    resetYouTubeKeyCooldowns();
+    const used: string[] = [];
+    const responses = [jsonRes({ error: { code: 403, errors: [{ reason: "quotaExceeded" }] } }, 403), jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }])), jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }]))];
+    const fetcher = (async (_url: string, init?: RequestInit) => { used.push((init?.headers as Record<string, string>)["x-goog-api-key"]!); return responses.shift()!; }) as unknown as typeof fetch;
+    const quota = { take: vi.fn(async () => true) };
+    const lookup = createYouTubeDataLookup({ apiKeys: ["KEY-ONE", "KEY-TWO", "KEY-THREE"], timeoutMs: 1000, quota, fetcher, now: () => NOW });
+    expect(await lookup.lookup(unknown, "e")).toMatchObject({ kind: "resolved", video: { videoId: "AAAAAAAAAAA" } });
+    expect(used).toEqual(["KEY-ONE", "KEY-TWO", "KEY-TWO"]);
+    expect(quota.take).toHaveBeenCalledTimes(1); // one logical search, whatever it took
+    // Key one is skipped on the next request without spending a call on it.
+    used.length = 0;
+    responses.push(jsonRes({ items: [] }));
+    await lookup.lookup(unknown, "e");
+    expect(used).toEqual(["KEY-TWO"]);
+  });
+
+  it("S9.18: an invalid key fails over; when every key is out, the result is RATE_LIMITED without retries", async () => {
+    resetYouTubeKeyCooldowns();
+    const used: string[] = [];
+    const responses = [jsonRes({ error: { message: "API key not valid. Please pass a valid API key.", details: [{ reason: "API_KEY_INVALID" }] } }, 400), jsonRes({ error: { code: 429 } }, 429), jsonRes({ error: { code: 403 } }, 403)];
+    const fetcher = (async (_url: string, init?: RequestInit) => { used.push((init?.headers as Record<string, string>)["x-goog-api-key"]!); return responses.shift()!; }) as unknown as typeof fetch;
+    const lookup = createYouTubeDataLookup({ apiKeys: ["BAD", "BUSY", "SPENT"], timeoutMs: 1000, quota: okQuota, fetcher, now: () => NOW });
+    expect(await resolveArtistVideo(unknown, opts({ dynamic: lookup }))).toMatchObject({ status: "RATE_LIMITED" });
+    expect(used).toEqual(["BAD", "BUSY", "SPENT"]);
+    // An ordinary upstream error is not a key problem: no failover.
+    resetYouTubeKeyCooldowns();
+    const once: string[] = [];
+    const broken = (async (_u: string, init?: RequestInit) => { once.push((init?.headers as Record<string, string>)["x-goog-api-key"]!); return jsonRes({}, 500); }) as unknown as typeof fetch;
+    expect(await createYouTubeDataLookup({ apiKeys: ["A", "B"], timeoutMs: 1000, quota: okQuota, fetcher: broken }).lookup(unknown, "e")).toMatchObject({ kind: "failed" });
+    expect(once).toEqual(["A"]);
+    resetYouTubeKeyCooldowns();
   });
 
   it("parses ISO durations", () => {

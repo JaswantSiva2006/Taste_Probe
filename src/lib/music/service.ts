@@ -38,7 +38,7 @@ export function defaultDynamicLookup(deps: DiscoveryDeps): DynamicLookup | undef
   return cachedLookup(
     deduplicated(
       createYouTubeDataLookup({
-        apiKey: music.youtubeApiKey,
+        apiKeys: music.youtubeApiKeys.length ? music.youtubeApiKeys : [music.youtubeApiKey],
         timeoutMs: music.timeoutMs,
         quota: createQuotaGuard(rateLimitStoreFor(deps.config), {
           dailySearchMax: music.dailySearchMax,

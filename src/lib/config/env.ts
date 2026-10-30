@@ -80,9 +80,14 @@ const EnvSchema = z.object({
   // S9.9 music playback. YOUTUBE_API_KEY is a dedicated YouTube Data API v3 key (never GOOGLE_API_KEY);
   // without it the dynamic lookup tier is disabled and costs nothing.
   YOUTUBE_API_KEY: optionalString,
+  // S9.18 failover keys, tried in order when the previous key is out of quota or rejected.
+  // Quota is per Google Cloud project: each key must come from a different project to add capacity.
+  YOUTUBE_API_KEY_2: optionalString,
+  YOUTUBE_API_KEY_3: optionalString,
   YOUTUBE_TIMEOUT_MS: int(5000, 100, 30_000),
-  YOUTUBE_DAILY_SEARCH_MAX: int(80, 0, 100),
-  YOUTUBE_SEARCHES_PER_EXPLORATION: int(6, 0, 10),
+  // Deployment-wide cap across all keys (about 100 searches per project per day).
+  YOUTUBE_DAILY_SEARCH_MAX: int(80, 0, 300),
+  YOUTUBE_SEARCHES_PER_EXPLORATION: int(6, 0, 30),
   // Exposes PENDING_REVIEW featured-moment candidates, labelled as unreviewed, for human review. Refused in production.
   MUSIC_MOMENT_REVIEW: bool(false),
   ADAPTIVE_POOL_ENABLED: bool(false),
@@ -140,6 +145,8 @@ export type AppConfig = {
   /** S9.9: YouTube resolution. `youtubeApiKey` stays server-side; absent = dynamic lookup disabled. */
   music: {
     youtubeApiKey?: string;
+    /** S9.18: every configured key in failover order (first = youtubeApiKey). Server-side only. */
+    youtubeApiKeys: string[];
     timeoutMs: number;
     dailySearchMax: number;
     searchesPerExploration: number;
@@ -275,6 +282,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
     }
   }
 
+  const youtubeKeys = [...new Set([e.YOUTUBE_API_KEY, e.YOUTUBE_API_KEY_2, e.YOUTUBE_API_KEY_3].filter((k): k is string => !!k))];
   return {
     nodeEnv: e.NODE_ENV,
     mode: e.QLOO_MODE,
@@ -321,7 +329,8 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
     verification: { pairs: verificationPairs(e) },
     publicScope: publicScope(e),
     music: {
-      youtubeApiKey: e.YOUTUBE_API_KEY,
+      youtubeApiKey: youtubeKeys[0],
+      youtubeApiKeys: youtubeKeys,
       timeoutMs: e.YOUTUBE_TIMEOUT_MS,
       dailySearchMax: e.YOUTUBE_DAILY_SEARCH_MAX,
       searchesPerExploration: e.YOUTUBE_SEARCHES_PER_EXPLORATION,

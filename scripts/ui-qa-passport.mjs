@@ -58,7 +58,7 @@ const child = spawn(process.execPath, [require.resolve("next/dist/bin/next"), "d
     NODE_TLS_REJECT_UNAUTHORIZED: "0",
     LLM_PROVIDER: "none",
     GOOGLE_API_KEY: "",
-    ...(RETAINED ? { YOUTUBE_SEARCHES_PER_EXPLORATION: "0", YOUTUBE_DAILY_SEARCH_MAX: "0" } : { YOUTUBE_API_KEY: "" }),
+    ...(RETAINED ? { YOUTUBE_SEARCHES_PER_EXPLORATION: "0", YOUTUBE_DAILY_SEARCH_MAX: "0" } : { YOUTUBE_API_KEY: "", YOUTUBE_API_KEY_2: "", YOUTUBE_API_KEY_3: "" }),
     SESSION_STORE: RETAINED ? "redis" : "memory",
     RATE_LIMIT_ENABLED: "false",
     ADAPTIVE_POOL_ENABLED: "false",

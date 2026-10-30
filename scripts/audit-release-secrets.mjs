@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 createRequire(import.meta.url)("@next/env").loadEnvConfig(process.cwd(), false, { info() {}, error() {} });
-const values = ["QLOO_API_KEY", "GOOGLE_API_KEY", "YOUTUBE_API_KEY", "SESSION_SIGNING_SECRET", "UPSTASH_REDIS_REST_TOKEN"].map((key) => ({ key, value: process.env[key] })).filter((item) => item.value?.length >= 12);
+const values = ["QLOO_API_KEY", "GOOGLE_API_KEY", "YOUTUBE_API_KEY", "YOUTUBE_API_KEY_2", "YOUTUBE_API_KEY_3", "SESSION_SIGNING_SECRET", "UPSTASH_REDIS_REST_TOKEN"].map((key) => ({ key, value: process.env[key] })).filter((item) => item.value?.length >= 12);
 const objects = execFileSync("git", ["rev-list", "--objects", "--all"], { encoding: "utf8" }).trim().split("\n");
 const findings = [];
 for (const row of objects) {
