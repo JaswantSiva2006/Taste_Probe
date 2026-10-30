@@ -1,4 +1,5 @@
 import "server-only";
+import { rankRecordings, tasteOf } from "@/lib/music/adaptive-listening";
 import type {
   AgentDecision,
   AnswerRequest,
@@ -550,7 +551,7 @@ function toView(
         }
       : {}),
     exploration: explorationOf(deps, state, finished ? recommendations.map((r) => r.candidate.entityId) : []),
-    ...(state.listening ? { listening: listeningViewOf(state.listening, (id) => candidateName(state, id)) } : {}),
+    ...(state.listening ? { listening: listeningViewOf(deps.config.features.adaptiveListening ? state.listening : { ...state.listening, upNext: null }, (id) => candidateName(state, id)) } : {}),
   };
 }
 
@@ -1169,6 +1170,64 @@ async function chooseSong(deps: DiscoveryDeps, state: SessionState, listening: L
 
 type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number };
 
+/** Bounded cross-artist supply. Reviewed mappings cost no lookup; dynamic attempts retain shared quotas. */
+async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = false, differentArtist = false): Promise<ListeningState> {
+  let l = { ...listening, upNext: null };
+  const inventory = [...(l.inventory ?? []), ...l.options];
+  let dynamicAttempts = 0;
+  const unavailable = new Set(l.unavailableArtistIds);
+  const ids = listeningArtistOrder(t.deps, t.state).filter((id) => !excludedArtists(t.state).has(id));
+  for (const id of ids.slice(0, 90)) {
+    if (inventory.some((o) => o.artistId === id) || unavailable.has(id)) continue;
+    if (!reviewedMappingFor(id) && dynamicAttempts >= 3) continue;
+    if (!reviewedMappingFor(id)) dynamicAttempts++;
+    try {
+      const options = await songOptions(t.deps, t.state, id);
+      if (options.length) inventory.push(...options);
+      else unavailable.add(id);
+    } catch { /* Feedback survives resolver/network failure. Retry in a future exploration. */ unavailable.add(id); }
+  }
+  const unique = [...new Map(inventory.map((o) => [`${o.artistId}:${o.videoId}`, o])).values()].slice(0, 180);
+  l = { ...l, inventory: unique, unavailableArtistIds: [...unavailable].slice(-100) };
+  const ranked = rankRecordings(t.state, l, unique, [], t.at).filter((r) => !differentArtist || r.option.artistId !== l.currentArtistId);
+  if (!ranked.length) return prepareOnly ? { ...l, notice: "verified_inventory_exhausted" } : { ...l, currentVideoId: null, selection: null, preview: null, notice: "verified_inventory_exhausted" };
+  const shortlist = ranked.slice(0, 6);
+  const meaningful = l.trackFeedback.at(-1)?.revision === t.revision;
+  let chosen = (!prepareOnly && !meaningful && listening.upNext ? ranked.find((r) => r.option.videoId === listening.upNext?.videoId && r.option.artistId === listening.upNext.artistId) : undefined) ?? shortlist[0]!;
+  let mode: SongSelection["mode"] = "DETERMINISTIC";
+  let fallbackReason: string | null = "insufficient_evidence";
+  let reasonCode = "contextual_verified_recording";
+  const evidence = songEvidence(t.state, l);
+  // Mechanical NEXT does not call Gemini. New feedback may justify a comparative decision.
+  const remaining = t.deps.config.limits.maxGeminiRequestsPerExploration - (t.state.session.geminiRequestCount ?? 0) - t.ledger.geminiRequests;
+  if (!t.deps.songSelector) fallbackReason = "llm_unavailable";
+  else if (remaining <= 0) fallbackReason = "exploration_gemini_budget_exhausted";
+  else if (!meaningful) fallbackReason = "no_new_preference_event";
+  if (meaningful && shortlist.length > 1 && t.deps.songSelector && remaining > 0) {
+    t.ledger.geminiRequests++; t.ledger.geminiDecisionRequests++;
+    fallbackReason = "gemini_failure";
+    try {
+      const r = await t.deps.songSelector.select({
+        sessionRef: t.state.session.sessionId.slice(0, 8), anchor: { name: t.state.seed.name, domain: t.state.seed.entityType },
+        artist: { entityId: "cross_artist_shortlist", name: "Authorized candidate artists" }, options: shortlist.map((r) => r.option),
+        lovedRecordings: evidence.loved, dislikedRecordings: evidence.disliked, confirmedLikes: evidence.likes, confirmedDislikes: evidence.dislikes,
+        context: shortlist.map((r) => ({ videoId: r.option.videoId, artistId: r.option.artistId, artistName: candidateName(t.state, r.option.artistId), tags: t.state.candidates.find((c) => c.entityId === r.option.artistId)!.tags.map((tag) => tag.name), score: r.score, evidenceRefs: r.evidenceRefs })),
+      });
+      t.ledger.tokens.input += r.usage.promptTokens; t.ledger.tokens.output += r.usage.outputTokens; t.ledger.tokens.thinking += r.usage.thoughtTokens;
+      if (r.costUsd === null) t.ledger.geminiCostKnown = false; else t.ledger.geminiCostUsd += r.costUsd;
+      const proposed = r.ok ? shortlist.find((c) => c.option.videoId === r.videoId) : undefined;
+      // Bounded influence: a model cannot overturn a strong deterministic conflict.
+      if (proposed && proposed.score >= shortlist[0]!.score - 0.15 && proposed.answer >= shortlist[0]!.answer - 0.05) { chosen = proposed; mode = "GEMINI"; fallbackReason = null; reasonCode = r.ok ? r.reasonCode : reasonCode; }
+      else fallbackReason = r.ok ? (proposed && proposed.answer < shortlist[0]!.answer - 0.05 ? "explicit_answer_priority" : "outside_contextual_margin") : `gemini_${r.error}`;
+    } catch { /* Accounted attempt; deterministic continuation retains feedback. */ }
+  }
+  l = { ...l, contextualDecision: { videoId: chosen.option.videoId, mode, reasonCode, fallbackReason, score: chosen.score, evidenceRefs: chosen.evidenceRefs.slice(0, 100), atRevision: t.revision } };
+  if (prepareOnly) return { ...l, upNext: chosen.option, notice: "up_next_prepared", geminiSongRequests: l.geminiSongRequests + (mode === "GEMINI" ? 1 : 0) };
+  return encounter(t, l, chosen.option.artistId, unique.filter((o) => o.artistId === chosen.option.artistId), {
+    option: chosen.option, selection: { mode, reasonCode, fallbackReason, eligibleCount: ranked.length },
+  }, "adaptive_next_ready");
+}
+
 /** Approved reviewer notes for windows of one recording (registry moments only). */
 const segmentNotes = (artistId: string, videoId: string): string[] =>
   (reviewedMappingFor(artistId)?.moments ?? []).filter((m) => m.videoId === videoId && m.status === "APPROVED" && m.reviewedBy && m.note.trim()).map((m) => m.note.trim());
@@ -1294,7 +1353,19 @@ async function listeningTurn(deps: DiscoveryDeps, sessionToken: string, kind: st
   const t: Turn = { deps, state: loaded.state, ledger, at: nowOf(deps), revision: lease.revision + 1 };
   let next: SessionState;
   try {
-    next = applyLedger(await withPreview(t, await run(t)), ledger);
+    next = await run(t);
+    // Exhaustion can reuse only the already-validated adaptive query families and explicit signals.
+    // No track reaction becomes a new Qloo artist/tag preference. Hashes and cumulative budgets apply.
+    if (deps.config.features.adaptiveListening && deps.config.features.adaptivePool && next.adaptivePool && next.listening && kind !== "love" && kind !== "save" && kind !== "finish" && next.listening.notice === "verified_inventory_exhausted") {
+      try {
+        const live: LiveDeps = { config: deps.config, provider: countingProvider(deps.provider, ledger), boundedAgent: deps.boundedAgent!, questionGenerator: deps.questionGenerator, now: deps.now ?? Date.now };
+        const refreshed = await retrieveAdaptive(live, next, ledger, { positiveTagIds: next.session.positiveTagIds, positiveEntityIds: next.session.positiveEntityIds });
+        next = refreshed.state;
+        if (next.candidates.some((c) => !t.state.candidates.some((old) => old.entityId === c.entityId))) next = { ...next, listening: await adaptiveNext({ ...t, state: next }, next.listening!) };
+      } catch { /* Exact feedback and the last verified inventory survive a failed replenishment. */ }
+    }
+    next = applyLedger(await withPreview(t, next), ledger);
+    if (deps.config.features.adaptiveListening && next.listening) next = { ...next, taste: tasteOf(next, next.listening) };
   } catch (error) {
     // Verified prior state is kept; any provider usage already spent stays charged.
     await releaseQuietly(sessions, lease, applyLedger(loaded.state, ledger));
@@ -1329,7 +1400,7 @@ export async function startListening(deps: DiscoveryDeps, input: ListenRequest):
       at: t.at,
       revision: t.revision,
     });
-    if (!input.artistId) return { ...state, listening: await moveToNextArtist(t, l) };
+    if (!input.artistId) return { ...state, listening: deps.config.features.adaptiveListening ? await adaptiveNext(t, l) : await moveToNextArtist(t, l) };
     const artistId = input.artistId;
     if (!state.candidates.some((c) => c.entityId === artistId) || excludedArtists(state).has(artistId)) {
       throw new AppError("ARTIST_NOT_IN_EXPLORATION", 403, "That artist is not part of this exploration");
@@ -1397,11 +1468,13 @@ export async function listeningFeedback(deps: DiscoveryDeps, input: ListeningFee
 
     switch (input.action) {
       case "LOVE": {
+        if (!input.artistIntent && trackReactions(l).get(current.videoId) === "love") break;
         l = track("love");
         if (input.artistIntent === "LIKE_ARTIST") {
           l = withArtistFeedback(l, { artistId, action: "like_artist", at: t.at, revision: t.revision });
           state = await likeArtist(t, state, artistId);
         }
+        if (deps.config.features.adaptiveListening) l = await adaptiveNext({ ...t, state }, l, true);
         break;
       }
       case "NOT_FOR_ME": {
@@ -1409,12 +1482,13 @@ export async function listeningFeedback(deps: DiscoveryDeps, input: ListeningFee
         l = track("not_for_me");
         if (input.artistIntent === "NOT_THIS_ARTIST") {
           notThisArtist();
-          l = await moveToNextArtist({ ...t, state }, l);
-        } else l = { ...l, notice: "recording_disliked_choose_next" };
+          l = deps.config.features.adaptiveListening ? await adaptiveNext({ ...t, state }, l) : await moveToNextArtist({ ...t, state }, l);
+        } else l = deps.config.features.adaptiveListening ? await adaptiveNext({ ...t, state }, l) : { ...l, notice: "recording_disliked_choose_next" };
         break;
       }
       case "NEXT": {
         l = nav("NEXT");
+        if (deps.config.features.adaptiveListening) { l = await adaptiveNext({ ...t, state }, l); break; }
         const choice = await chooseSong(deps, state, l, artistId, eligibleOptions(l, l.options, current.videoId), t.ledger);
         l = choice ? encounter(t, l, artistId, l.options, choice, null) : await moveToNextArtist({ ...t, state }, l);
         break;
@@ -1429,6 +1503,7 @@ export async function listeningFeedback(deps: DiscoveryDeps, input: ListeningFee
       case "DIFFERENT_ARTIST": {
         l = nav("DIFFERENT_ARTIST");
         if (input.artistIntent === "NOT_THIS_ARTIST") notThisArtist();
+        if (deps.config.features.adaptiveListening) { l = await adaptiveNext({ ...t, state }, l, false, true); break; }
         const moved = await moveToNextArtist({ ...t, state }, l);
         // No other artist with a verified recording: keep the current one presented.
         l = moved.currentVideoId ? moved : { ...moved, currentArtistId: artistId, currentVideoId: current.videoId };

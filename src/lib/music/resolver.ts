@@ -98,7 +98,7 @@ export async function resolveArtistVideo(artist: ResolveArtist, opts: ResolveOpt
   const how = "cached" in found && found.cached ? "CACHED" : "USED";
   switch (found.kind) {
     case "resolved":
-      return { ...base, status: "RESOLVED", video: found.video, reason: null, dynamicLookup: how };
+      return { ...base, status: "RESOLVED", video: found.video, alternates: found.alternates ?? [], reason: null, dynamicLookup: how };
     case "ambiguous":
       return outcome("NEEDS_REVIEW", found.reason, how);
     case "none":

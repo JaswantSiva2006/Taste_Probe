@@ -18,7 +18,7 @@ import type { ResolvedVideo } from "@/lib/contracts";
  */
 
 export type DynamicOutcome =
-  | { kind: "resolved"; video: ResolvedVideo; cached?: boolean }
+  | { kind: "resolved"; video: ResolvedVideo; alternates?: ResolvedVideo[]; cached?: boolean }
   | { kind: "ambiguous"; reason: string; cached?: boolean }
   | { kind: "none"; cached?: boolean }
   | { kind: "quota" }
@@ -140,18 +140,19 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
           part: "snippet,contentDetails,status",
           id: matching.map(({ item }) => item.id!.videoId!).join(","),
         });
-        const ok = (videos.items ?? []).flatMap((video) => {
+        const verified = (videos.items ?? []).flatMap((video) => {
           const channel = verifiedChannel(video.snippet?.channelTitle ?? "", artistName);
           const title = video.snippet?.title?.trim() ?? "";
           if (!isVideoId(video.id) || video.status?.embeddable !== true || video.status.privacyStatus !== "public" || !channel || !title) return [];
+          if (!matching.some(({ item }) => item.id?.videoId === video.id && item.snippet?.channelId === video.snippet?.channelId)) return [];
           if (channel.kind === "vevo" && !corroboratesVevoTitle(title, artistName)) return [];
           return [{ video, channel }];
-        })[0];
+        });
+        const ok = verified[0];
         if (!ok) return { kind: "ambiguous", reason: "no_embeddable_public_match" };
-        const durationSeconds = parseIsoDuration(ok.video.contentDetails?.duration);
-        return {
-          kind: "resolved",
-          video: {
+        const toVideo = (ok: (typeof verified)[number]): ResolvedVideo => {
+          const durationSeconds = parseIsoDuration(ok.video.contentDetails?.duration);
+          return {
             videoId: ok.video.id!,
             title: ok.video.snippet!.title!.slice(0, 300),
             channelTitle: ok.video.snippet!.channelTitle!.slice(0, 200),
@@ -160,8 +161,9 @@ export function createYouTubeDataLookup(opts: { apiKey: string; timeoutMs: numbe
             channelKind: ok.channel.kind,
             verifiedAt: (opts.now?.() ?? new Date()).toISOString(),
             ...(durationSeconds ? { durationSeconds } : {}),
-          },
+          };
         };
+        return { kind: "resolved", video: toVideo(ok), alternates: verified.slice(1, 5).map(toVideo) };
       } catch (error) {
         if ((error as { quota?: boolean }).quota) return { kind: "quota" };
         return { kind: "failed", reason: (error as Error).name === "TimeoutError" ? "youtube_timeout" : "youtube_error" };

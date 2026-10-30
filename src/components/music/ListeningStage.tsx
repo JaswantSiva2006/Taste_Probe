@@ -60,6 +60,9 @@ const NOTICE_COPY: Record<string, string> = {
   skipped_artist_without_verified_song: "Skipped an artist who doesn’t have a verified recording yet.",
   already_saved: "Already in your Sound Passport.",
   all_recordings_disliked: "You passed on every verified recording of this artist.",
+  adaptive_next_ready: "Your reaction is remembered. Here’s the next verified recording—press Play when you’re ready.",
+  verified_inventory_exhausted: "You’ve reached the end of the verified recordings available in this exploration. Your saved Passport is still here.",
+  up_next_prepared: "Loved. Your next recording is ready when you are.",
 };
 
 const searchUrl = (name: string) => `https://www.youtube.com/results?${new URLSearchParams({ search_query: name.slice(0, 120) })}`;
@@ -89,7 +92,7 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
     lastAction.current = null;
     const text =
       a.action === "LOVE" && a.intent === "LIKE_ARTIST" ? `Noted: more like ${l.artist?.name ?? "this artist"}. That steers which artists come next.`
-      : a.action === "LOVE" ? "Loved. Remembered for this recording only."
+      : a.action === "LOVE" ? (l.upNext ? `Loved. Up next: ${l.upNext.title}.` : "Loved. Remembered for this recording only.")
       : l.notice === "saved" ? "Stamped into your Sound Passport."
       : null;
     if (text) setConfirm({ key: `${view.revision}`, text });
@@ -206,10 +209,11 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
           <VinylDisc state="failed" seed={l.artist?.entityId ?? "none"} artist={l.artist?.name ?? "—"} size="sm" tonearm={false} />
           <div>
             <h2 className="sp-empty__title" id="tp-listen-title" tabIndex={-1}>
-              We couldn’t verify a recording for {l.artist?.name ?? "this artist"}
+              {l.notice === "verified_inventory_exhausted" ? "You’ve heard the available verified recordings" : <>We couldn’t verify a recording for {l.artist?.name ?? "this artist"}</>}
             </h2>
-            <p>This doesn’t mean their music is unavailable. We couldn’t confirm a playable YouTube recording belongs to this artist. Try another artist here, or look for their music on YouTube.</p>
+            <p>{l.notice === "verified_inventory_exhausted" ? "There are no new verified recordings left in this exploration. Your saved Passport stays on this device." : "This doesn’t mean their music is unavailable. We couldn’t confirm a playable YouTube recording belongs to this artist. Try another artist here, or look for their music on YouTube."}</p>
             <div className="sp-intro__actions">
+              {l.notice === "verified_inventory_exhausted" ? <button type="button" className="sp-btn sp-btn--quiet" onClick={onOpenPassport}>Open your Sound Passport</button> : null}
               <button type="button" className="sp-btn sp-btn--primary" disabled={busy} onClick={() => onListen()}>
                 <DifferentArtist size={18} /> Try the next artist
               </button>
@@ -235,7 +239,7 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
   const loved = l.currentFeedback === "love";
   const passed = l.currentFeedback === "not_for_me";
   const prev = [...l.history].reverse().find((h) => h.videoId !== video.videoId);
-  const selection = l.selection ? SELECTION_COPY[l.selection.mode]?.replace("{n}", String(l.selection.eligibleCount)) : null;
+  const selection = l.selection?.reasonCode === "contextual_verified_recording" ? "Chosen from the unheard verified recordings using the original artist relationship, your answers and reactions. Track sound is unknown unless independently annotated." : l.selection ? SELECTION_COPY[l.selection.mode]?.replace("{n}", String(l.selection.eligibleCount)) : null;
   const preview = l.preview && l.preview.videoId === video.videoId ? l.preview : null;
   const mode = playback?.mode ?? (preview ? "preview" : "full");
   const previewEnded = Boolean(playback?.previewEnded);
@@ -346,6 +350,7 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
           </p>
 
           <div className="sp-move" role="group" aria-label="Where next">
+            {l.upNext ? <p className="sp-feedback">Up next: {l.upNext.title}. Use Next when you’re ready.</p> : null}
             <button type="button" className="sp-move__btn" disabled={busy} onClick={() => act("ANOTHER_SONG")}>
               <AnotherSong size={22} />
               <span>

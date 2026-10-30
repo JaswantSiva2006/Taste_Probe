@@ -57,7 +57,7 @@ export function trackReactions(state: ListeningState): Map<string, "love" | "not
   return out;
 }
 
-export const seenVideoIds = (state: ListeningState) => new Set(state.encounters.map((e) => e.videoId));
+export const seenVideoIds = (state: ListeningState) => new Set([...(state.seenRecordingIds ?? []), ...state.encounters.map((e) => e.videoId)]);
 
 /** Recordings that may be chosen next for this artist: verified, not current, not heard, not disliked. */
 export function eligibleOptions(state: ListeningState, options: VerifiedSongOption[], excludeVideoId: string | null): VerifiedSongOption[] {
@@ -90,6 +90,7 @@ export function recordEncounter(state: ListeningState, input: { artistId: string
     currentArtistId: input.artistId,
     currentVideoId: input.option.videoId,
     selection: input.selection,
+    seenRecordingIds: [...new Set([...seenVideoIds(state), input.option.videoId])].slice(0, 600),
     visitedArtistIds: state.visitedArtistIds.includes(input.artistId) ? state.visitedArtistIds : cap([...state.visitedArtistIds, input.artistId], 100),
     encounters: cap([...state.encounters, { artistId: input.artistId, artistName: input.artistName, videoId: input.option.videoId, title: input.option.title, at: input.at, revision: input.revision, selection: input.selection.mode }], 100),
   };
@@ -126,6 +127,7 @@ export function listeningViewOf(state: ListeningState, artistName: (id: string) 
     history: state.encounters.slice(-30).map((e) => ({ artistId: e.artistId, artistName: e.artistName, videoId: e.videoId, title: e.title, feedback: reactions.get(e.videoId) ?? null })),
     saved: state.saved,
     geminiSongRequests: state.geminiSongRequests,
+    upNext: state.upNext ?? null,
     // Only a preview of the presented recording is ever projected.
     preview: current && state.preview && state.preview.videoId === current.videoId && state.preview.artistId === current.artistId ? state.preview : null,
   };

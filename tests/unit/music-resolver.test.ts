@@ -162,7 +162,7 @@ const search = (items: Array<{ id: string; channel: string; channelId?: string }
 const videos = (items: Array<{ id: string; channel: string; embeddable?: boolean; title?: string }>) => ({
   items: items.map((i) => ({
     id: i.id,
-    snippet: { title: i.title ?? "Song", channelTitle: i.channel },
+    snippet: { title: i.title ?? "Song", channelTitle: i.channel, channelId: "C1" },
     contentDetails: { duration: "PT4M5S" },
     status: { embeddable: i.embeddable ?? true, privacyStatus: "public" },
   })),
@@ -203,6 +203,18 @@ describe("optional YouTube Data API tier", () => {
     const { fetcher } = fakeFetch(jsonRes(search([{ id: "AAAAAAAAAAA", channel: "MusicHub" }])));
     const dynamic = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher });
     expect(await resolveArtistVideo(unknown, opts({ dynamic }))).toMatchObject({ status: "NEEDS_REVIEW", reason: "no_topic_channel_match", video: null });
+  });
+
+  it("exposes multiple recordings only from the searched verified channel and video IDs", async () => {
+    const { fetcher, calls } = fakeFetch(
+      jsonRes(search([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "New Artist - Topic" }])),
+      jsonRes(videos([{ id: "AAAAAAAAAAA", channel: "New Artist - Topic" }, { id: "BBBBBBBBBBB", channel: "New Artist - Topic" }, { id: "CCCCCCCCCCC", channel: "New Artist - Topic" }])),
+    );
+    const dynamic = createYouTubeDataLookup({ apiKey: "k", timeoutMs: 1000, quota: okQuota, fetcher });
+    const r = await resolveArtistVideo(unknown, opts({ dynamic }));
+    expect(r.status).toBe("RESOLVED");
+    expect(r.alternates.map((v) => v.videoId)).toEqual(["BBBBBBBBBBB"]);
+    expect(calls).toHaveLength(2);
   });
 
   it("accepts an exact-name VEVO channel only when video metadata corroborates the artist", async () => {

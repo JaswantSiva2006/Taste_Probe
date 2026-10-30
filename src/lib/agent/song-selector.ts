@@ -34,6 +34,8 @@ export type SongSelectionInput = {
   /** Names of tags/entities the user explicitly confirmed or rejected in questions. */
   confirmedLikes: string[];
   confirmedDislikes: string[];
+  /** S9.16: artist-level evidence only; never describes unheard audio. */
+  context?: Array<{ videoId: string; artistId: string; artistName: string; tags: string[]; score: number; evidenceRefs: string[] }>;
 };
 
 export type SongSelectionResult =
@@ -151,9 +153,10 @@ export function buildSongRequest(input: SongSelectionInput, temperature: number)
     anchor: input.anchor,
     artist: input.artist.name,
     options: input.options.map((o) => ({ videoId: o.videoId, title: o.title, channel: o.channelTitle, durationSeconds: o.durationSeconds ?? null })),
+    ...(input.context ? { crossArtistComparison: input.context, evidenceScope: "Qloo ARTIST associations and explicit reactions only. Track sound is unknown. Compare supported evidence; retain the first candidate on ambiguity." } : {}),
   };
   return {
-    systemInstruction: { parts: [{ text: RULES }] },
+    systemInstruction: { parts: [{ text: input.context ? RULES.replace("by the named artist", "by the candidate's own verified artist") + "\nFor cross-artist comparison, cite evidenceRefs from the chosen candidate. Do not claim to know any recording's sound. Cultural anchor is a retrieval relationship, not proof of a musical feature." : RULES }] },
     contents: [
       {
         role: "user",
@@ -171,15 +174,16 @@ export function buildSongRequest(input: SongSelectionInput, temperature: number)
               properties: {
                 videoId: { type: "STRING", enum: ids },
                 reasonCode: { type: "STRING", enum: [...SONG_REASON_CODES] },
+                ...(input.context ? { evidenceRefs: { type: "ARRAY", items: { type: "STRING", enum: [...new Set(input.context.flatMap((c) => c.evidenceRefs))] } } } : {}),
               },
-              required: ["videoId", "reasonCode"],
+              required: input.context ? ["videoId", "reasonCode", "evidenceRefs"] : ["videoId", "reasonCode"],
             },
           },
         ],
       },
     ],
     toolConfig: { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["select_verified_song"] } },
-    generationConfig: { temperature, maxOutputTokens: 128 },
+    generationConfig: { temperature, maxOutputTokens: input.context ? 512 : 128 },
   };
 }
 
@@ -235,6 +239,12 @@ export function createGeminiSongSelector(options: { model: string; temperature: 
       if (status < 200 || status >= 300) return done({ ok: false, error: "http_error", usage }, usage);
       const parsed = interpretSongResponse(body, ids);
       if ("error" in parsed) return done({ ok: false, error: parsed.error, usage }, usage);
+      if (input.context) {
+        const parts = (body as { candidates?: Array<{ content?: { parts?: Array<{ functionCall?: { args?: { evidenceRefs?: unknown } } }> } }> }).candidates?.[0]?.content?.parts;
+        const refs = parts?.find((p) => p.functionCall)?.functionCall?.args?.evidenceRefs;
+        const allowed = input.context.find((c) => c.videoId === parsed.videoId)?.evidenceRefs ?? [];
+        if (!Array.isArray(refs) || !refs.length || refs.some((r) => typeof r !== "string" || !allowed.includes(r))) return done({ ok: false, error: "malformed", usage }, usage);
+      }
       return done({ ok: true, videoId: parsed.videoId, reasonCode: parsed.reasonCode, usage }, usage);
     },
     async selectPreview(input) {

@@ -27,7 +27,8 @@ import { startQlooStub } from "./lib/qloo-stub.mjs";
 import { axeScan, hygiene, searchAndSelect, chooseSource } from "./lib/ui-flow.mjs";
 
 const require = createRequire(import.meta.url);
-const OUT = resolve(".artifacts/passport");
+const ADAPTIVE = process.argv.includes("--adaptive");
+const OUT = resolve(ADAPTIVE ? ".artifacts/s9-16/browser" : ".artifacts/passport");
 const ONLY_CAPTURE = process.argv.includes("--capture");
 await mkdir(OUT, { recursive: true });
 
@@ -59,6 +60,7 @@ const child = spawn(process.execPath, [require.resolve("next/dist/bin/next"), "d
     SESSION_STORE: "memory",
     RATE_LIMIT_ENABLED: "false",
     ADAPTIVE_POOL_ENABLED: "false",
+    ADAPTIVE_LISTENING_ENABLED: ADAPTIVE ? "true" : "false",
     NEXT_TELEMETRY_DISABLED: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -144,6 +146,35 @@ async function toStage(page) {
 }
 
 try {
+  if (ADAPTIVE) {
+    const { page, context, errors } = await newPage(1440);
+    await toStage(page);
+    await click(page, "Begin listening");
+    await waitPhase(page, "ready");
+    const first = await videoId(page);
+    await page.getByRole("button", { name: /^Listen in full/ }).click();
+    check("adaptive full recording remains playable", await waitPhase(page, "playing"));
+    await click(page, "Love");
+    check("Love retains playing recording and prepares Up Next", (await videoId(page)) === first && /Up next/.test(await page.textContent(".sp-stage")) && (await phase(page)) === "playing");
+    await click(page, "Save to Passport");
+    check("adaptive Save preserves exact video", await page.evaluate((id) => JSON.parse(localStorage.getItem("tasteprobe.passport.v1") ?? "{}").items?.some((s) => s.video.videoId === id), first));
+    const seen = new Set([first]);
+    for (let i = 0; i < 5; i++) {
+      await click(page, "Not for me");
+      const id = await videoId(page);
+      check(`dislike ${i + 1} automatically presents a distinct recording without a dialog`, !!id && !seen.has(id) && (await page.locator(".sp-followup").count()) === 0);
+      seen.add(id);
+      check(`dislike ${i + 1} does not autoplay`, await waitPhase(page, "ready"));
+    }
+    await noProblems(page, "adaptive stage");
+    await shot(page, "adaptive-reactions", true);
+    await click(page, "Finish listening");
+    await page.getByRole("button", { name: "Open your Sound Passport", exact: true }).click();
+    await page.reload({ waitUntil: "networkidle" });
+    check("Passport persists after repeated feedback and reload", await page.evaluate((id) => JSON.parse(localStorage.getItem("tasteprobe.passport.v1") ?? "{}").items?.some((s) => s.video.videoId === id), first));
+    check("adaptive no page errors", errors.length === 0, { errors });
+    await context.close();
+  } else {
   // ------------------------------------------------ desktop journey (1440)
   {
     const { page, errors, context } = await newPage(1440);
@@ -442,6 +473,7 @@ try {
     const v = await vinyl(page);
     check("reduced motion: playing, but the record does not animate", v.state === "playing" && v.name === "none", { ...v, phase: await phase(page), mode: await attr(page, "data-mode"), ended: await attr(page, "data-preview-ended"), t: await attr(page, "data-current-time") });
     await context.close();
+  }
   }
 } catch (e) {
   check("journey", false, { error: String(e.message).slice(0, 400) });

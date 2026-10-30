@@ -162,6 +162,31 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("S9.16 flagged HTTP feedback path", () => {
+  it.each([
+    ["movie", INTERSTELLAR, "Interstellar"],
+    ["music_artist", "0D8EAFA4-CEEA-44D5-8E1F-26A8A9F49A77", "Nils Frahm"],
+    ["tv_show", "D03D0913-A7B9-4C46-BFEB-958C1B3FA387", "Breaking Bad"],
+    ["video_game", "FC14952D-5C27-48D8-908A-044ABD07FEAF", "Celeste"],
+    ["podcast", "B4D6B6FD-7146-4E1C-AE48-B8EBD2BB71DA", "Radiolab"],
+  ] as [EntityType, string, string][])("%s automatically advances and rejects duplicate/concurrent feedback", async (domain, id, name) => {
+    sourceFixture = { id, name, domain };
+    vi.stubEnv("ADAPTIVE_LISTENING_ENABLED", "true");
+    let v = await ok(await listen(await explore()));
+    const before = v.listening!.video!.videoId;
+    const requests = await Promise.all([act(v, "NOT_FOR_ME"), act(v, "NOT_FOR_ME")]);
+    expect(requests.map((r) => r.status).sort()).toEqual([200, 409]);
+    v = await ok(requests.find((r) => r.status === 200)!);
+    expect(v.listening!.video!.videoId).not.toBe(before);
+    expect(v.listening!.notice).toBe("adaptive_next_ready");
+    expect(v.seed.entityId).toBe(id);
+    const noRating = calls.geminiSong;
+    v = await ok(await act(v, "NEXT"));
+    expect(calls.geminiSong).toBe(noRating);
+    expect(v.listening!.history.filter((h) => h.feedback === "not_for_me")).toHaveLength(1);
+  });
+});
+
 describe("S9.12 listening journey over HTTP", () => {
   it.each([
     ["movie", INTERSTELLAR, "Interstellar"],

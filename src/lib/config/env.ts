@@ -84,6 +84,7 @@ const EnvSchema = z.object({
   // Exposes PENDING_REVIEW featured-moment candidates, labelled as unreviewed, for human review. Refused in production.
   MUSIC_MOMENT_REVIEW: bool(false),
   ADAPTIVE_POOL_ENABLED: bool(false),
+  ADAPTIVE_LISTENING_ENABLED: bool(false),
   // S9.15: legacy non-music journeys (internal regression only). Refused in production.
   LEGACY_GENERIC_JOURNEYS: bool(false),
 });
@@ -122,6 +123,7 @@ export type AppConfig = {
     agentTracing: boolean;
     expensiveOperations: boolean;
     adaptivePool: boolean;
+    adaptiveListening?: boolean;
   };
   /** Registered-but-disabled pairs admitted for internal verification (never in production). */
   verification: { pairs: string[] };
@@ -309,6 +311,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       agentTracing: e.ENABLE_AGENT_TRACING,
       expensiveOperations: e.ENABLE_EXPENSIVE_OPERATIONS,
       adaptivePool: e.ADAPTIVE_POOL_ENABLED,
+      adaptiveListening: e.ADAPTIVE_LISTENING_ENABLED,
     },
     verification: { pairs: verificationPairs(e) },
     publicScope: publicScope(e),

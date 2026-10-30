@@ -13,6 +13,7 @@ import {
 import { AppError } from "@/lib/validation/errors";
 import { AdaptivePoolStateSchema } from "@/lib/discovery/adaptive-pool";
 import { ListeningStateSchema } from "@/lib/contracts/listening";
+import { TasteStateSchema } from "@/lib/music/adaptive-listening";
 import { signToken, verifyToken } from "./token";
 
 /** Full session state. Authoritative copy lives in the SessionStore, never in the token. */
@@ -27,6 +28,7 @@ export const SessionStateSchema = z.object({
   adaptivePool: AdaptivePoolStateSchema.optional(),
   /** S9.12 optional listening loop; absent until the user starts listening. */
   listening: ListeningStateSchema.optional(),
+  taste: TasteStateSchema.optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 

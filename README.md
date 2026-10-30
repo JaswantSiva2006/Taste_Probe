@@ -22,6 +22,8 @@ For live use, configure server-side Qloo, Gemini and session credentials. Produc
 
 ## Verification
 
+S9.16's experimental cross-artist listening loop is gated by `ADAPTIVE_LISTENING_ENABLED=false` by default. Its verified scope, evidence limits and rollback are documented in [adaptive listening intelligence](docs/adaptive-listening-intelligence.md). Run `smoke:adaptive-listening`, `evaluate:adaptive-listening` and `qa:adaptive-listening` for its dedicated gates. Direct YouTube multimodal enrichment is disabled; no audio-understanding claim is made.
+
 ```sh
 npm run lint
 npm run typecheck

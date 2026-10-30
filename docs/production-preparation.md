@@ -53,7 +53,9 @@ Rate limits: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_SEARCH_MAX`, `RATE_LIMIT_START_MA
 
 Budgets: `MAX_QUESTIONS`, `MAX_QLOO_CALLS_PER_SESSION`, `MAX_AGENT_TOOL_CALLS_PER_TURN`, `MAX_GEMINI_REQUESTS_PER_EXPLORATION`, `MAX_RECOMMENDATION_CANDIDATES`, `FINAL_RECOMMENDATION_COUNT`.
 
-Features/observability: `ADAPTIVE_POOL_ENABLED`, `ENABLE_ADAPTIVE_QUESTIONING`, `ENABLE_EARLY_STOPPING`, `ENABLE_QLOO_CACHE`, `CACHE_TTL_SECONDS`, `ENABLE_EVALUATION_LOGGING`, `ENABLE_AGENT_TRACING`, `ENABLE_EXPENSIVE_OPERATIONS`, `SENTRY_DSN`.
+Features/observability: `ADAPTIVE_POOL_ENABLED`, `ADAPTIVE_LISTENING_ENABLED`, `ENABLE_ADAPTIVE_QUESTIONING`, `ENABLE_EARLY_STOPPING`, `ENABLE_QLOO_CACHE`, `CACHE_TTL_SECONDS`, `ENABLE_EVALUATION_LOGGING`, `ENABLE_AGENT_TRACING`, `ENABLE_EXPENSIVE_OPERATIONS`, `SENTRY_DSN`.
+
+`ADAPTIVE_LISTENING_ENABLED` is optional and defaults to `false`. S9.16's experimental path can spend a bounded Gemini request after meaningful reactions; it does not activate multimodal analysis. Review `adaptive-listening-intelligence.md` and its PARTIAL quality status before enabling. Roll back by setting it false; Passport data is unaffected.
 
 Recommended explicit settings: `SESSION_STORE=redis`, `LLM_PROVIDER=google`, `QLOO_BASE_URL=https://hackathon.api.qloo.com`, `RATE_LIMIT_ENABLED=true`. Leave budget defaults unchanged. `ADAPTIVE_POOL_ENABLED` defaults to `false`: explicitly choose `true` only if deploying the adaptive controller with accepted quota/testing scope. Its enabled path can spend Qloo calls, including artist-level feedback. Do not turn it on merely to obtain a green demo.
 

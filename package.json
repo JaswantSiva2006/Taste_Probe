@@ -7,6 +7,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "evaluate:adaptive-listening": "vitest run tests/evaluation/adaptive-listening.test.ts --reporter=verbose",
+    "qa:adaptive-listening": "node scripts/ui-qa-passport.mjs --adaptive",
+    "smoke:adaptive-listening": "vitest run tests/integration/adaptive-listening.test.ts --reporter=verbose",
     "dev": "next dev",
     "dev:mock": "cross-env QLOO_MODE=mock next dev",
     "build": "next build",

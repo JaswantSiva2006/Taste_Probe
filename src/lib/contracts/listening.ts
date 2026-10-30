@@ -125,6 +125,12 @@ export const ListeningStateSchema = z.object({
   /** S9.15: preview window for the current recording (optional: older sessions parse unchanged). */
   preview: PreviewSelectionSchema.nullable().optional(),
   geminiPreviewRequests: z.number().int().nonnegative().optional(),
+  /** S9.16 bounded verified inventory; absent in earlier sessions. */
+  inventory: z.array(VerifiedSongOptionSchema).max(180).optional(),
+  /** Independent of the bounded UI encounter log: automatic recommendations cannot forget old IDs. */
+  seenRecordingIds: z.array(VideoId).max(600).optional(),
+  upNext: VerifiedSongOptionSchema.nullable().optional(),
+  contextualDecision: z.object({ videoId: VideoId, mode: z.enum(["GEMINI", "DETERMINISTIC"]), reasonCode: z.string(), fallbackReason: z.string().nullable(), score: z.number(), evidenceRefs: z.array(z.string()).max(100), atRevision: rev }).optional(),
 });
 export type ListeningState = z.infer<typeof ListeningStateSchema>;
 
@@ -146,5 +152,6 @@ export const ListeningViewSchema = z.object({
   geminiSongRequests: z.number().int().nonnegative(),
   /** S9.15: validated preview of `video` (null: full playback only). */
   preview: PreviewSelectionSchema.nullable(),
+  upNext: VerifiedSongOptionSchema.nullable().optional(),
 });
 export type ListeningView = z.infer<typeof ListeningViewSchema>;
