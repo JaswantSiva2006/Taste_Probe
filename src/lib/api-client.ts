@@ -3,11 +3,13 @@ import {
   ApiFailureSchema,
   DiscoveryViewSchema,
   HealthDataSchema,
+  MusicResolutionSchema,
   SearchDataSchema,
   apiSuccessSchema,
   type DiscoveryView,
   type EntityType,
   type HealthData,
+  type MusicResolution,
   type PreferenceResponse,
   type ProviderMode,
   type SearchData,
@@ -67,4 +69,7 @@ export const api = {
     call("/api/discovery/accept", DiscoveryViewSchema, post({ sessionToken, entityId })),
   continue: (sessionToken: string): Promise<WithMode<DiscoveryView>> =>
     call("/api/discovery/continue", DiscoveryViewSchema, post({ sessionToken })),
+  // S9.9: the server picks the video; the client only names an artist of this exploration.
+  resolveMusic: (sessionToken: string, artistId: string): Promise<WithMode<MusicResolution>> =>
+    call("/api/music/resolve", MusicResolutionSchema, post({ sessionToken, artistId })),
 };

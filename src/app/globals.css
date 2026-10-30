@@ -1996,3 +1996,109 @@ body {
     animation: none;
   }
 }
+
+/* ---------------------------------------------------------------- S9.9 listening room */
+.tp-programme .tp-pick-actions .tp-btn--ghost,
+.tp-listen .tp-btn--ghost {
+  border-color: rgba(31, 26, 20, 0.4);
+  color: var(--tp-paper-ink);
+}
+.tp-programme .tp-pick-actions .tp-btn--ghost[aria-pressed="true"] {
+  border-color: var(--tp-paper-ink);
+  box-shadow: inset 0 0 0 1px var(--tp-paper-ink);
+}
+.tp-listen {
+  margin-top: var(--tp-s6);
+  border-top: 1px solid var(--tp-line);
+  padding-top: var(--tp-s5);
+}
+.tp-listen__kicker {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--tp-text-muted);
+}
+.tp-listen__title {
+  margin: var(--tp-s1) 0 var(--tp-s2);
+  font-family: var(--tp-serif);
+  font-size: var(--tp-h3);
+}
+.tp-listen__title:focus-visible {
+  outline: 2px solid var(--tp-amber-deep);
+  outline-offset: 4px;
+}
+.tp-listen__note,
+.tp-listen__status,
+.tp-player__status,
+.tp-player__review {
+  margin: 0 0 var(--tp-s3);
+  color: var(--tp-text-muted);
+  font-size: 0.9375rem;
+}
+.tp-listen__fallback,
+.tp-player__fallback {
+  border: 1px solid var(--tp-dislike);
+  border-radius: var(--tp-radius);
+  padding: var(--tp-s4);
+  margin-bottom: var(--tp-s3);
+}
+.tp-listen__fallback p,
+.tp-player__fallback p {
+  margin: 0 0 var(--tp-s2);
+}
+.tp-listen__fallback a,
+.tp-player__fallback a {
+  color: var(--tp-paper-ink);
+  text-decoration: underline;
+}
+.tp-player__fallback-title {
+  font-weight: 600;
+}
+/* The embed: 16:9, never covered, never smaller than YouTube's 200x200 minimum. */
+.tp-player__frame {
+  position: relative;
+  width: 100%;
+  max-width: 48rem;
+  aspect-ratio: 16 / 9;
+  min-height: 200px;
+  background: var(--tp-black);
+  border-radius: var(--tp-radius);
+  overflow: hidden;
+}
+.tp-player__frame[hidden] {
+  display: none;
+}
+.tp-player__host,
+.tp-player__host > div,
+.tp-player__host iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.tp-player__credit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--tp-s3);
+  margin: var(--tp-s2) 0 var(--tp-s3);
+  font-size: 0.9375rem;
+}
+.tp-player__track {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.tp-player__channel {
+  color: var(--tp-text-muted);
+  overflow-wrap: anywhere;
+}
+.tp-player__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tp-s2);
+  margin-bottom: var(--tp-s3);
+}
+.tp-player__controls a.tp-btn {
+  text-decoration: none;
+}

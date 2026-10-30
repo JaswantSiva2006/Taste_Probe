@@ -5,7 +5,8 @@ import type { AppConfig } from "@/lib/config/env";
 import { AppError } from "@/lib/validation/errors";
 
 /** S9.6: "continue" opens a new paid round, so it is limited like "start" (own bucket, same max). */
-export type RateLimitAction = "search" | "start" | "answer" | "continue";
+/** S9.9: "resolve" (music video lookup) is read-only and has its own bucket. */
+export type RateLimitAction = "search" | "start" | "answer" | "continue" | "resolve";
 export type RateLimitResult = { count: number; resetAt: number };
 export interface RateLimitStore {
   increment(key: string, windowMs: number, now: number): Promise<RateLimitResult>;
@@ -56,7 +57,8 @@ function cache(): StoreCache {
   return (value[GLOBAL_KEY] ??= {});
 }
 
-function storeFor(config: AppConfig): RateLimitStore {
+/** The shared limiter store (Redis in production); S9.9 also keeps YouTube quota counters here. */
+export function rateLimitStoreFor(config: AppConfig): RateLimitStore {
   const c = cache();
   if (config.sessionStore.kind === "memory") return (c.memory ??= createMemoryRateLimitStore());
   c.redis ??= new Map();
@@ -86,11 +88,14 @@ export async function enforceRateLimit(
 ): Promise<void> {
   if (!config.rateLimit.enabled) return;
   const max =
-    action === "search" ? config.rateLimit.searchMax : action === "start" || action === "continue" ? config.rateLimit.startMax : config.rateLimit.answerMax;
+    action === "search" ? config.rateLimit.searchMax
+      : action === "start" || action === "continue" ? config.rateLimit.startMax
+      : action === "resolve" ? config.rateLimit.resolveMax
+      : config.rateLimit.answerMax;
   const now = options.now ?? Date.now();
   const windowMs = config.rateLimit.windowSeconds * 1_000;
   const key = `tp:rl:${action}:${sourceIdentity(request, config)}`;
-  const result = await (options.store ?? storeFor(config)).increment(key, windowMs, now);
+  const result = await (options.store ?? rateLimitStoreFor(config)).increment(key, windowMs, now);
   if (result.count > max) {
     const retry = Math.max(1, Math.ceil((result.resetAt - now) / 1_000));
     throw new AppError("RATE_LIMITED", 429, "Too many requests; try again later", retry);

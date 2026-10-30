@@ -116,7 +116,11 @@ async function expectFinale(page, responses, { target, minFeatured = 1 }) {
   assert.equal((await why.locator(".tp-whybox__text").textContent()).trim(), path.featured[0].explanation.text);
   const art = target === "book" ? ".tp-art--portrait" : ".tp-art--square";
   assert.ok(await page.locator(`.tp-start ${art}`).count(), `START HERE artwork uses the ${target} frame`);
-  assert.equal(await page.locator(".tp-programme a[href^='http']").count(), 0, "no external links are invented");
+  assert.equal(await page.locator(".tp-programme a[href^='http']:not(.tp-listen a)").count(), 0, "no external links are invented");
+  // S9.9: the listening room may link out, but only to YouTube.
+  const listenLinks = await page.locator(".tp-listen a[href^='http']").evaluateAll((as) => as.map((a) => a.getAttribute("href")));
+  assert.ok(listenLinks.every((h) => h.startsWith("https://www.youtube.com/")), "listening links go to YouTube only");
+  assert.equal(await page.locator(".tp-listen").count(), target === "music_artist" ? 1 : 0, "one listening room, music journeys only");
 }
 
 // ---------------------------------------------------------------- 1. movie → book, every width

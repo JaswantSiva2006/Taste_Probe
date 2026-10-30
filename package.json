@@ -22,6 +22,8 @@
     "qa:ui": "node scripts/ui-qa.mjs",
     "qa": "node scripts/qa.mjs",
     "qa:live": "node scripts/qa-live.mjs",
+    "qa:music": "node scripts/qa-music.mjs",
+    "verify:mappings": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-music-mappings.mjs",
     "evaluate": "vitest run tests/evaluation/question-evaluation.test.ts tests/evaluation/question-quality.test.ts tests/evaluation/question-wording.test.ts --reporter=verbose",
     "smoke:qloo": "node scripts/smoke-qloo.mjs",
     "smoke:gemini": "node scripts/smoke-gemini.mjs",

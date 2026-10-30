@@ -50,6 +50,7 @@ const EnvSchema = z.object({
   RATE_LIMIT_SEARCH_MAX: int(30, 1, 500),
   RATE_LIMIT_START_MAX: int(10, 1, 100),
   RATE_LIMIT_ANSWER_MAX: int(30, 1, 300),
+  RATE_LIMIT_RESOLVE_MAX: int(60, 1, 600),
   RATE_LIMIT_WINDOW_SECONDS: int(600, 10, 86_400),
   TRUSTED_PROXY_IP_HEADER: optionalString,
   ENABLE_EXPENSIVE_OPERATIONS: bool(true),
@@ -73,6 +74,14 @@ const EnvSchema = z.object({
   // S9.3 isolated internal verification: comma-separated registered pairs ("music_artist->book").
   // Refused in production; never exposed publicly; cannot admit unregistered pairs.
   VERIFICATION_PAIRS: optionalString,
+  // S9.9 music playback. YOUTUBE_API_KEY is a dedicated YouTube Data API v3 key (never GOOGLE_API_KEY);
+  // without it the dynamic lookup tier is disabled and costs nothing.
+  YOUTUBE_API_KEY: optionalString,
+  YOUTUBE_TIMEOUT_MS: int(5000, 100, 30_000),
+  YOUTUBE_DAILY_SEARCH_MAX: int(40, 0, 100),
+  YOUTUBE_SEARCHES_PER_EXPLORATION: int(2, 0, 10),
+  // Exposes PENDING_REVIEW featured-moment candidates, labelled as unreviewed, for human review. Refused in production.
+  MUSIC_MOMENT_REVIEW: bool(false),
 });
 
 export type AppConfig = {
@@ -87,6 +96,7 @@ export type AppConfig = {
     searchMax: number;
     startMax: number;
     answerMax: number;
+    resolveMax: number;
     windowSeconds: number;
     trustedProxyIpHeader?: string;
   };
@@ -110,8 +120,24 @@ export type AppConfig = {
   };
   /** Registered-but-disabled pairs admitted for internal verification (never in production). */
   verification: { pairs: string[] };
+  /** S9.9: YouTube resolution. `youtubeApiKey` stays server-side; absent = dynamic lookup disabled. */
+  music: {
+    youtubeApiKey?: string;
+    timeoutMs: number;
+    dailySearchMax: number;
+    searchesPerExploration: number;
+    momentReview: boolean;
+  };
   sentryDsn?: string;
 };
+
+/** S9.9: unreviewed moment candidates are a review tool, never shown in production. */
+function momentReview(e: z.infer<typeof EnvSchema>): boolean {
+  if (e.MUSIC_MOMENT_REVIEW && e.NODE_ENV === "production") {
+    throw new AppError("CONFIG_ERROR", 500, "MUSIC_MOMENT_REVIEW is not allowed in production");
+  }
+  return e.MUSIC_MOMENT_REVIEW;
+}
 
 /** Parses VERIFICATION_PAIRS; only registered, currently disabled pairs are accepted. */
 function verificationPairs(e: z.infer<typeof EnvSchema>): string[] {
@@ -229,6 +255,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       searchMax: e.RATE_LIMIT_SEARCH_MAX,
       startMax: e.RATE_LIMIT_START_MAX,
       answerMax: e.RATE_LIMIT_ANSWER_MAX,
+      resolveMax: e.RATE_LIMIT_RESOLVE_MAX,
       windowSeconds: e.RATE_LIMIT_WINDOW_SECONDS,
       trustedProxyIpHeader: e.TRUSTED_PROXY_IP_HEADER,
     },
@@ -260,6 +287,13 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       expensiveOperations: e.ENABLE_EXPENSIVE_OPERATIONS,
     },
     verification: { pairs: verificationPairs(e) },
+    music: {
+      youtubeApiKey: e.YOUTUBE_API_KEY,
+      timeoutMs: e.YOUTUBE_TIMEOUT_MS,
+      dailySearchMax: e.YOUTUBE_DAILY_SEARCH_MAX,
+      searchesPerExploration: e.YOUTUBE_SEARCHES_PER_EXPLORATION,
+      momentReview: momentReview(e),
+    },
     sentryDsn: e.SENTRY_DSN,
   };
 }

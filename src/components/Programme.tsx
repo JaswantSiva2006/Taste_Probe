@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { domainLabel, type DiscoveryView, type RankedRecommendation } from "@/lib/contracts";
 import { splitTitle } from "@/lib/ui/presentation";
 import {
@@ -14,6 +15,7 @@ import {
   type ResolvedPathItem,
 } from "@/lib/ui/presentation";
 import { ArrowRight, Check, Cross, Refresh } from "./Icons";
+import { ListeningRoom } from "./music/ListeningRoom";
 import { ResultCard } from "./ResultShelf";
 import { TasteNotes } from "./Workspace";
 
@@ -49,7 +51,9 @@ function Why({ entry, summary }: { entry: ResolvedPathItem; summary: string }) {
  * S9.7 per-pick actions. "I'll try this" (primary) records an intention; "Not for me"
  * (secondary) withdraws only this pick. Names are unique per card for assistive tech.
  */
-function PickActions({ rec, busy, onAccept, onReject, size = "md" }: { rec: RankedRecommendation; busy: boolean; onAccept: Props["onAccept"]; onReject: Props["onReject"]; size?: "md" | "sm" }) {
+type Listen = { selectedId: string | null; onListen: (rec: RankedRecommendation) => void } | null;
+
+function PickActions({ rec, busy, onAccept, onReject, listen, size = "md" }: { rec: RankedRecommendation; busy: boolean; onAccept: Props["onAccept"]; onReject: Props["onReject"]; listen: Listen; size?: "md" | "sm" }) {
   const title = splitTitle(rec.candidate.name).title;
   const sm = size === "sm" ? " tp-btn--sm" : "";
   return (
@@ -62,6 +66,17 @@ function PickActions({ rec, busy, onAccept, onReject, size = "md" }: { rec: Rank
         <Cross size={size === "sm" ? 16 : 18} />
         <span>Not for me</span>
       </button>
+      {listen ? (
+        <button
+          type="button"
+          className={`tp-btn tp-btn--ghost${sm}`}
+          aria-label={`Listen: ${title}`}
+          aria-pressed={listen.selectedId === rec.candidate.entityId}
+          onClick={() => listen.onListen(rec)}
+        >
+          <span>Listen</span>
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -81,6 +96,7 @@ const PENDING_COPY: Record<ActionKind, string> = {
 export function Programme(p: Props) {
   const { view, names } = p;
   const ex = view.exploration;
+  const [chosenId, setChosenId] = useState<string | null>(null);
   if (ex?.status === "accepted") return <AcceptedProgramme {...p} />;
   const plural = domainLabel(view.targetType, true);
   const sourceNoun = domainLabel(view.seed.entityType);
@@ -92,6 +108,19 @@ export function Programme(p: Props) {
   const fallbackTop = !path ? view.recommendations[0] : undefined;
   const actionable = Boolean(ex); // older servers have no feedback endpoints
   const blocked = continueBlockedCopy(view);
+  // S9.9: music journeys get one listening room; it starts on START HERE but never plays by itself.
+  const isMusic = view.targetType === "music_artist";
+  const listenable = view.recommendations.filter((r) => !ex?.rejectedRecommendationIds.includes(r.candidate.entityId));
+  const listening = isMusic ? (listenable.find((r) => r.candidate.entityId === chosenId) ?? lead?.rec ?? listenable[0] ?? null) : null;
+  const listen: Listen = isMusic
+    ? {
+        selectedId: listening?.candidate.entityId ?? null,
+        onListen: (rec) => {
+          setChosenId(rec.candidate.entityId);
+          requestAnimationFrame(() => document.getElementById("tp-listen-title")?.focus());
+        },
+      }
+    : null;
 
   return (
     <article className="tp-programme" aria-labelledby="tp-programme-title" aria-busy={p.busy}>
@@ -114,6 +143,10 @@ export function Programme(p: Props) {
         {p.pending ? PENDING_COPY[p.pending] : ""}
       </p>
 
+      {listening ? (
+        <ListeningRoom sessionToken={view.sessionToken} artist={{ entityId: listening.candidate.entityId, name: listening.candidate.name }} />
+      ) : null}
+
       {lead ? (
         <section className="tp-start" aria-labelledby="tp-start-label">
           <p className="tp-start__label" id="tp-start-label" tabIndex={-1}>
@@ -124,7 +157,7 @@ export function Programme(p: Props) {
             <Why entry={lead} summary="Why this starting point?" />
             {actionable ? (
               <div className="tp-start__intent">
-                <PickActions rec={lead.rec} busy={p.busy} onAccept={p.onAccept} onReject={p.onReject} />
+                <PickActions rec={lead.rec} busy={p.busy} onAccept={p.onAccept} onReject={p.onReject} listen={listen} />
                 <p className="tp-start__note">“I’ll try this” saves it as your starting point; it doesn’t mean you’ve tried it. “Not for me” sets aside only this {domainLabel(view.targetType)}.</p>
               </div>
             ) : null}
@@ -154,7 +187,7 @@ export function Programme(p: Props) {
                 <p className="tp-path__role">{ROLE_LABEL[entry.item.role]}</p>
                 <ResultCard item={entry.rec} names={names} hasPrevious={false} showRank={false} />
                 <Why entry={entry} summary="Why this?" />
-                {actionable ? <PickActions rec={entry.rec} busy={p.busy} onAccept={p.onAccept} onReject={p.onReject} size="sm" /> : null}
+                {actionable ? <PickActions rec={entry.rec} busy={p.busy} onAccept={p.onAccept} onReject={p.onReject} listen={listen} size="sm" /> : null}
               </li>
             ))}
           </ol>
@@ -170,7 +203,7 @@ export function Programme(p: Props) {
             {others.map((item) => (
               <li key={item.candidate.entityId}>
                 <ResultCard item={item} names={names} hasPrevious={false} showRank={false} />
-                {actionable ? <PickActions rec={item} busy={p.busy} onAccept={p.onAccept} onReject={p.onReject} size="sm" /> : null}
+                {actionable ? <PickActions rec={item} busy={p.busy} onAccept={p.onAccept} onReject={p.onReject} listen={listen} size="sm" /> : null}
               </li>
             ))}
           </ul>

@@ -835,6 +835,25 @@ export async function rejectRecommendation(deps: DiscoveryDeps, input: Recommend
   return toView(deps, next, state.order, presentingDecision(next), token, loaded.revision + 1);
 }
 
+/**
+ * S9.9: read-only authorization for music playback. The artist must be a verified
+ * candidate of this exploration's music-artist pool and not set aside by the user.
+ * Uses the same signed token and revision check as every transition but writes nothing,
+ * so resolving a video never advances the session or invalidates the token.
+ */
+export async function loadAuthorizedArtist(deps: DiscoveryDeps, sessionToken: string, entityId: string) {
+  const loaded = await sessionsOf(deps).load(sessionToken);
+  const { session, candidates } = loaded.state;
+  if (session.targetType !== "music_artist") {
+    throw new AppError("UNSUPPORTED_DOMAIN", 400, "Listening is only available when exploring music artists");
+  }
+  const candidate = candidates.find((c) => c.entityId === entityId);
+  if (!candidate || session.rejectedEntityIds.includes(entityId)) {
+    throw new AppError("ARTIST_NOT_IN_EXPLORATION", 403, "That artist is not part of this exploration");
+  }
+  return { explorationId: loaded.sessionId, expiresAt: loaded.expiresAt, candidate };
+}
+
 /** ACCEPT a shown recommendation: records the intention to try it (not consumption). Terminal. */
 export async function acceptRecommendation(deps: DiscoveryDeps, input: RecommendationFeedbackRequest): Promise<DiscoveryView> {
   const sessions = sessionsOf(deps);
