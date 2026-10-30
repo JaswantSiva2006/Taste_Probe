@@ -46,7 +46,7 @@ describe("domain capability registry", () => {
   it("registers all 30 directed cross-domain pairs and enables only verified ones", () => {
     expect(DOMAIN_PAIRS).toHaveLength(31);
     expect(pairStatus("movie", "book")).toBe("enabled");
-    expect(DOMAIN_PAIRS.filter((p) => p.enabled).every((p) => p.evidence === "FULL_E2E_VERIFIED")).toBe(true);
+    expect(DOMAIN_PAIRS.filter((p) => p.enabled).every((p) => p.evidence === "FULL_E2E_VERIFIED" || (p.target === "music_artist" && p.evidence === "VERIFIED_INSIGHTS"))).toBe(true);
     expect(DOMAIN_PAIRS.find((p) => p.source === "podcast" && p.target === "video_game")).toMatchObject({ enabled: false, evidence: "OFFLINE_MATRIX" });
   });
 
@@ -118,6 +118,7 @@ describe("registry extensibility (adding a pair is a local, guarded change)", ()
     expect(registryProblems(proposed, domains)).toEqual([
       "podcast: sessionReady disagrees with SESSION_DOMAINS",
       "podcast->book: podcast has no session adapter",
+      "podcast->music_artist: podcast has no session adapter",
     ]);
   });
 
@@ -204,7 +205,6 @@ describe("server-side pair validation", () => {
   it("rejects a typed anchor search outside enabled sources before any provider call", async () => {
     const { provider, calls } = spyProvider();
     await expect(searchAnchors(testDeps({ provider }), "dune", "book")).rejects.toMatchObject({ code: "UNSUPPORTED_DOMAIN" });
-    await expect(searchAnchors(testDeps({ provider }), "serial", "podcast")).rejects.toMatchObject({ code: "UNSUPPORTED_DOMAIN" });
     expect(calls()).toBe(0);
     await expect(searchAnchors(testDeps({ provider }), "interstellar", "movie")).resolves.toMatchObject({ results: expect.any(Array) });
   });
@@ -229,7 +229,7 @@ describe("isolated verification configuration", () => {
     const deps = testDeps({ config: testConfig({ VERIFICATION_PAIRS: "podcast->book" }) });
     expect(assertEnabledPair({ sourceType: "podcast", targetType: "book" }, deps.config.verification.pairs)).toBe("verification");
     expect(enabledSourceDomains(deps.config.verification.pairs)).toContain("podcast");
-    expect(enabledSourceDomains()).not.toContain("podcast");
-    expect(publicCapabilities().pairs.some((p) => p.source === "podcast")).toBe(false);
+    expect(enabledSourceDomains()).toContain("podcast");
+    expect(publicCapabilities().pairs.some((p) => p.source === "podcast" && p.target === "book")).toBe(false);
   });
 });

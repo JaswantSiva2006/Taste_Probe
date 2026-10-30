@@ -1,5 +1,19 @@
 # S9.14 source-to-music evidence
 
+## S9.14R recovery update
+
+The five previously provider-verified sources (movie, music artist, TV show, video game, podcast) are now enabled through the shared registry. Their exact evidence remains `VERIFIED_INSIGHTS` except the historical movie full-E2E record; enablement is no longer mislabelled as five separate live browser acceptances. Five fixture-backed HTTP listening-chain tests additionally cover Gemini selection, track/artist separation, switching, and SavedDiscovery anchor provenance. Books remain disabled.
+
+Book root cause: typed Search succeeds with the genuine novel **Dune (Dune, #1)** (1965), ID `9BA85467-2189-46DC-BB98-4B25EE182A9D`. `/v2/insights?filter.type=urn:entity:artist&signal.interests.entities=9BA85467-2189-46DC-BB98-4B25EE182A9D&take=8&feature.explainability=true` returns HTTP 400: `All of the provided signal.interests.entities were invalid. At least one valid signal or filter is required for entity insights.` This is an upstream signal rejection, not an application schema or encoding error. It establishes rejection of this verified book under this key; it does not prove every book is unsupported.
+
+Recovery production browser: Nils Frahm source, real Qloo/Gemini/Redis, authorized Ólafur Arnalds recording, actual YouTube PLAYING, Pause, track dislike preserving artist, and Another song all passed. Revisions 0–4. The next acceptance assertion failed because the remaining recording correctly used `SINGLE_OPTION` rather than Gemini. The harness stopped, so Save/Finish/Passport and explicit artist feedback were not reached in that live run. No full production-browser pass is claimed.
+
+Combined campaign ledger: 18/18 Qloo calls (six additional: three book diagnosis calls including one search with no exact-name match, and three reserved/executed browser discovery calls), one Gemini request, estimated $0.0006128, zero YouTube Data API calls. No further Qloo requests are authorized by the current allowance.
+
+Public music sources: Movies, Music artists, TV shows, Video games, Podcasts. Books unavailable. Primary Start exploring opens explicit source selection. Generic book-destination exploration remains available through its existing enabled sources.
+
+The matrix below is the original S9.14 checkpoint; this recovery update supersedes its enablement and book-diagnosis columns.
+
 Date: 2026-10-30. All requests used the existing Qloo provider and `https://hackathon.api.qloo.com`, typed `/search`, then `/v2/insights` with `filter.type=urn:entity:artist`, verified source ID, `take=8`, explainability enabled, and one Insights attempt. Persistent campaign ledger: `.artifacts/s9-14/ledger.json`.
 
 | Source | Verified source ID | Artist count | Actual evidence | Public enablement |

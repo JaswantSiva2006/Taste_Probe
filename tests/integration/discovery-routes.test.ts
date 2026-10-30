@@ -76,7 +76,7 @@ describe("GET /api/health and /api/entities/search", () => {
     await fail(await searchRoute(new Request(`${BASE}/entities/search`)), 400, "VALIDATION_ERROR");
     await fail(await searchRoute(new Request(`${BASE}/entities/search?q=x&type=magazine`)), 400, "VALIDATION_ERROR");
     // A registered domain that is not an enabled source is a registry rejection, not a schema error.
-    await fail(await searchRoute(new Request(`${BASE}/entities/search?q=x&type=podcast`)), 400, "UNSUPPORTED_DOMAIN");
+    await fail(await searchRoute(new Request(`${BASE}/entities/search?q=x&type=book`)), 400, "UNSUPPORTED_DOMAIN");
   });
 
   it("returns 429 with Retry-After before a second protected search", async () => {
@@ -319,6 +319,10 @@ describe("S9.2 domain registry and Discovery Path over HTTP", () => {
       { source: "movie", target: "book", sourceLabel: "movie", targetLabel: "books" },
       { source: "movie", target: "music_artist", sourceLabel: "movie", targetLabel: "music artists" },
       { source: "music_artist", target: "book", sourceLabel: "music artist", targetLabel: "books" },
+      { source: "music_artist", target: "music_artist", sourceLabel: "music artist", targetLabel: "music artists" },
+      { source: "tv_show", target: "music_artist", sourceLabel: "TV show", targetLabel: "music artists" },
+      { source: "video_game", target: "music_artist", sourceLabel: "video game", targetLabel: "music artists" },
+      { source: "podcast", target: "music_artist", sourceLabel: "podcast", targetLabel: "music artists" },
     ]);
   });
 

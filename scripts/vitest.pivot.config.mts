@@ -11,7 +11,7 @@ export default defineConfig({
   test: {
     environment: "node",
     // Live probes; each npm script names exactly one file so no run spends another probe's budget.
-    include: ["scripts/probe-six-domain.test.ts", "scripts/probe-pivot.test.ts", "scripts/probe-cross-domain.test.ts", "scripts/probe-adaptive-retrieval.test.ts", "scripts/probe-youtube-dynamic.test.ts"],
+    include: ["scripts/diagnose-book-release.test.ts", "scripts/probe-six-domain.test.ts", "scripts/probe-pivot.test.ts", "scripts/probe-cross-domain.test.ts", "scripts/probe-adaptive-retrieval.test.ts", "scripts/probe-youtube-dynamic.test.ts"],
     testTimeout: 30_000,
     fileParallelism: false,
     disableConsoleIntercept: true,

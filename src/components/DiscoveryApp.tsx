@@ -259,8 +259,12 @@ export function DiscoveryApp() {
     setScreen("app");
     if (view) restart(true);
     chooseTarget("music_artist");
+    // The primary CTA starts with an explicit cultural-source choice.
+    setSource(null);
+    setSelected(null);
+    setResults(null);
     requestAnimationFrame(() => {
-      const el = document.getElementById("tp-anchor") ?? document.querySelector<HTMLElement>(".tp-step--anchor");
+      const el = document.querySelector<HTMLElement>('.tp-step--anchor input[type="radio"]') ?? document.querySelector<HTMLElement>(".tp-step--anchor");
       el?.scrollIntoView({ behavior: "smooth", block: "center" });
       el?.focus({ preventScroll: true });
     });
@@ -414,7 +418,7 @@ export function DiscoveryApp() {
         <p>
           {mode === "mock"
             ? "This demo runs on synthetic fixtures. The live build uses Qloo Insights for recommendations and Google Gemini to choose among optimizer-approved questions."
-            : "Recommendations from Qloo Insights. Questions chosen by Google Gemini from options TasteProbe’s optimizer approves."}{" "}
+            : "Recommendations from Qloo Insights. TasteProbe uses grounded questions and verified recordings, with Gemini selection when available."}{" "}
           Built for the Qloo Agentic Hackathon.
         </p>
       </footer>

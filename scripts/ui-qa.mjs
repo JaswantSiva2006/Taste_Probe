@@ -241,8 +241,8 @@ for (const width of [375, 1440]) {
     const { page, shot, requests, responses } = s;
     await chooseWorld(page, "Music artists");
     const sources = (await page.locator(".tp-chip").allTextContents()).map((t) => t.trim());
-    assert.deepEqual(sources, ["a movie"], "Music artists accepts only movies");
-    assert.equal(await page.getByRole("radio", { name: "a movie", exact: true }).isChecked(), true, "a lone source is pre-chosen (domain only, never an entity)");
+    assert.deepEqual(sources, ["a movie", "a music artist", "a TV show", "a video game", "a podcast"], "Music artists offers the five server-verified source domains");
+    await chooseSource(page, "a movie");
     await searchAndSelect(page, "Interstellar", "Interstellar");
     await begin(page);
     assert.deepEqual([requests.start.at(-1).sourceType, requests.start.at(-1).targetType], ["movie", "music_artist"]);
@@ -393,7 +393,7 @@ for (const width of [375, 1440]) {
   const s = await open(375);
   s.state.induced = true;
   const res = await s.page.evaluate(() =>
-    fetch("/api/discovery/start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ entityQuery: "Glass Harbor (synthetic)", sourceType: "music_artist", targetType: "music_artist", maxQuestions: 3, selectedEntityId: "mock:music_artist:glass-harbor" }) }).then(async (r) => ({ status: r.status, code: (await r.json()).error?.code })),
+    fetch("/api/discovery/start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ entityQuery: "Interstellar", sourceType: "movie", targetType: "movie", maxQuestions: 3, selectedEntityId: "mock:movie:interstellar" }) }).then(async (r) => ({ status: r.status, code: (await r.json()).error?.code })),
   );
   assert.deepEqual(res, { status: 400, code: "UNSUPPORTED_DOMAIN" }, "same-domain pair refused");
   const res2 = await s.page.evaluate(() =>

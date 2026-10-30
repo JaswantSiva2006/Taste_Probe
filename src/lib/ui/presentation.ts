@@ -253,7 +253,7 @@ export function friendlyError(code: string, ctx: ErrorContext = {}): FriendlyErr
     case "NETWORK_ERROR":
       return { title: "Connection lost", body: "We couldn't reach TasteProbe. Check your connection and try again.", recovery: "retry" };
     case "SESSION_EXPIRED":
-      return { title: "This exploration expired", body: "Sessions last 30 minutes. Start again with the same choices.", recovery: "restart" };
+      return { title: "This exploration expired", body: "Sessions last 30 minutes. Start again with the same choices. Your saved Sound Passport is still available on this device.", recovery: "restart" };
     case "SESSION_REVISION_CONFLICT":
       return { title: "This exploration moved on", body: "It was updated by another request (perhaps another tab). Start fresh to continue safely.", recovery: "restart" };
     case "SESSION_FINISHED":

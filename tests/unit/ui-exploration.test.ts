@@ -19,14 +19,14 @@ describe("capability-driven pickers", () => {
 
   it("sources are filtered by the chosen destination", () => {
     expect(sourceChoices(LIVE, "book").map((s) => s.domain)).toEqual(["movie", "music_artist"]);
-    expect(sourceChoices(LIVE, "music_artist").map((s) => s.domain)).toEqual(["movie"]);
+    expect(sourceChoices(LIVE, "music_artist").map((s) => s.domain)).toEqual(["movie", "music_artist", "tv_show", "video_game", "podcast"]);
     expect(sourceChoices(LIVE, null)).toEqual([]);
     expect(sourceChoices(LIVE, "podcast")).toEqual([]);
   });
 
   it("unsupported pairs are never offered", () => {
     expect(isOfferedPair(LIVE, "movie", "book")).toBe(true);
-    expect(isOfferedPair(LIVE, "music_artist", "music_artist")).toBe(false);
+    expect(isOfferedPair(LIVE, "music_artist", "music_artist")).toBe(true);
     expect(isOfferedPair(LIVE, "book", "movie")).toBe(false);
     expect(isOfferedPair(LIVE, "podcast", "book")).toBe(false);
     expect(isOfferedPair(LIVE, null, "book")).toBe(false);

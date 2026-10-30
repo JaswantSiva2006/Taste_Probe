@@ -1,5 +1,15 @@
 # S9.14 handoff — not yet ready for S10
 
+## S9.14R current handoff
+
+Branch `seg/S9-14R-release-recovery`, based on `e208be1`. Deploy using the tracked `vercel.json` (`npm ci`, `npm run build`, Next.js framework). The music journey now offers five verified source domains; Books is disabled after a precise upstream signal rejection. The source chooser is explicit. Existing generic exploration is preserved.
+
+Do not rerun a full live campaign: `.artifacts/s9-14/ledger.json` is now at **18/18 Qloo**, **1 Gemini**, **$0.0006128**, zero YouTube Data API calls. Additional Qloo spending requires separate authorization. The recovery browser test is a recorded partial failure (single remaining song option caused a deterministic selection); no completed production listening/Passport pass is claimed.
+
+Publication prerequisites: approve the public repository name/owner and open-source license, and authenticate GitHub/Vercel (or identify an already authorized repository/hosting project). Neither CLI nor hosting credentials was available. No public repo, approved license, preview URL, or public deployment was created. Do not describe this checkpoint as submission-ready. Keep the exact secret values out of chat, Git, browser storage, and command arguments; enter production secrets through the host's protected settings.
+
+Run `npm run audit:release-secrets` before publication. It found no currently configured secrets in reachable history and no tracked environment files; obtain a broader secret scan before publication if old credentials may have existed. Required remaining acceptance: actual constrained Gemini song decision among multiple eligible recordings, complete non-movie production listening/Passport workflow, and a clean-browser public HTTPS smoke including CSP/Referer/player behavior. Do not submit to Devpost automatically.
+
 Use branch `seg/S9-14-six-domain-release-verification`. This checkpoint deliberately keeps new source pairs disabled pending end-to-end acceptance. See `final-release-verification.md` and `six-domain-music-capability-matrix.md` before making demo claims.
 
 Build and test: `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`. Run `smoke:mock`, `smoke:multi-round`, `smoke:listening`, `qa`, `qa:passport`, `evaluate`, `evaluate:adaptive`, `evaluate:songs`, and `evaluate:question-wording` through npm.

@@ -21,7 +21,7 @@ import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 import { startQlooStub } from "./lib/qloo-stub.mjs";
-import { axeScan, hygiene, searchAndSelect } from "./lib/ui-flow.mjs";
+import { axeScan, hygiene, searchAndSelect, chooseSource } from "./lib/ui-flow.mjs";
 
 const require = createRequire(import.meta.url);
 const OUT = resolve(".artifacts/passport");
@@ -127,6 +127,7 @@ async function noProblems(page, label) {
 async function toStage(page) {
   await page.goto(base, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: /Start exploring/ }).first().click();
+  await chooseSource(page, "a movie");
   await page.waitForSelector("#tp-anchor");
   await searchAndSelect(page, "Interstellar", "Interstellar");
   await page.getByRole("button", { name: /^Begin with/ }).click();
@@ -145,8 +146,9 @@ try {
     await noProblems(page, "1440 landing");
     check("landing: no autoplay / no player on load", (await page.locator("iframe").count()) === 0);
     await page.getByRole("button", { name: /Start exploring/ }).first().click();
+    await chooseSource(page, "a movie");
     await page.waitForSelector("#tp-anchor");
-    check("Start exploring opens the music journey with a film anchor", await page.getByRole("radio", { name: /^Music artists/ }).isChecked());
+    check("Start exploring opens source selection; movie is selected explicitly", await page.getByRole("radio", { name: /^Music artists/ }).isChecked());
     await searchAndSelect(page, "Interstellar", "Interstellar");
     await shot(page, "1440-02-source-selected");
     await page.getByRole("button", { name: /^Begin with/ }).click();
@@ -271,7 +273,7 @@ try {
     await shot(page, "1440-17-passport-empty");
     await noProblems(page, "1440 empty passport");
     await page.getByRole("button", { name: /Start exploring/ }).click();
-    check("Empty Passport → Start exploring returns to the journey", (await page.locator("#tp-anchor").count()) === 1);
+    check("Empty Passport → Start exploring returns to source choice", (await page.locator(".tp-step--anchor").count()) === 1);
     check("1440 journey: no page/console errors", errors.length === 0, { errors: errors.slice(0, 5) });
     await context.close();
   }

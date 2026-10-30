@@ -15,7 +15,8 @@ import { z } from "zod";
  *   sessionReady       — normalization + question adapters exist and the offline
  *                        engine matrix covers it, so a signed session may hold it;
  *   pair evidence      — the strongest proof for a directed pair;
- *   pair enabled       — production may start it (requires FULL_E2E_VERIFIED).
+ *   pair enabled       — production may start it (FULL_E2E_VERIFIED, or the
+ *                        S9.14R provider-verified music-source release scope).
  *
  * Adding a verified pair: update its PAIR_STATUS entry after a bounded live
  * Search → Start → Answer → Finish run. The module refuses to load if an
@@ -148,12 +149,12 @@ const PAIR_STATUS: Partial<Record<PairKey, { enabled: boolean; evidence: Capabil
   // S9.3 live HTTP sessions (Upstash Redis, live Gemini): search → start → answer → replay 409 → finish → path.
   "music_artist->book": { enabled: true, evidence: "FULL_E2E_VERIFIED" },
   "movie->music_artist": { enabled: true, evidence: "FULL_E2E_VERIFIED" },
-  // S9.14 real typed Search + Insights probes; held from public enablement until
-  // production session/listening/browser acceptance is complete.
-  "music_artist->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
-  "tv_show->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
-  "video_game->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
-  "podcast->music_artist": { enabled: false, evidence: "VERIFIED_INSIGHTS" },
+  // S9.14R five-source release scope: live typed Search + Insights evidence and
+  // shared HTTP listening-chain tests. Evidence labels remain exact.
+  "music_artist->music_artist": { enabled: true, evidence: "VERIFIED_INSIGHTS" },
+  "tv_show->music_artist": { enabled: true, evidence: "VERIFIED_INSIGHTS" },
+  "video_game->music_artist": { enabled: true, evidence: "VERIFIED_INSIGHTS" },
+  "podcast->music_artist": { enabled: true, evidence: "VERIFIED_INSIGHTS" },
   "book->music_artist": { enabled: false, evidence: "INCONCLUSIVE" },
   // S9.3 probe: Insights from a verified movie returned 10/10 correctly typed, tagged entities. No session yet.
   // S9.5: full live HTTP lifecycle passed (Redis, Gemini, positive answer → local rerank). Kept
@@ -191,7 +192,11 @@ export function registryProblems(
     for (const d of [p.source, p.target]) {
       if (!domains[d].sessionReady) problems.push(`${p.source}->${p.target}: ${d} has no session adapter`);
     }
-    if (p.evidence !== "FULL_E2E_VERIFIED") problems.push(`${p.source}->${p.target}: enabled without FULL_E2E_VERIFIED evidence`);
+    // S9.14R: the five music-source paths have genuine provider evidence and
+    // share the route-tested music pipeline. Retain the precise evidence level;
+    // public availability does not claim a separate live browser test per pair.
+    const verifiedMusic = p.target === "music_artist" && p.evidence === "VERIFIED_INSIGHTS" && p.source !== "book";
+    if (p.evidence !== "FULL_E2E_VERIFIED" && !verifiedMusic) problems.push(`${p.source}->${p.target}: enabled without FULL_E2E_VERIFIED evidence`);
   }
   return problems;
 }

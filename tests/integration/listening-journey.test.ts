@@ -4,7 +4,7 @@ import { POST as feedbackRoute } from "@/app/api/discovery/feedback/route";
 import { POST as finishRoute } from "@/app/api/discovery/finish/route";
 import { POST as listenRoute } from "@/app/api/discovery/listen/route";
 import { POST as startRoute } from "@/app/api/discovery/start/route";
-import { ApiFailureSchema, DiscoveryViewSchema, SavedDiscoverySchema, apiSuccessSchema, type DiscoveryView } from "@/lib/contracts";
+import { ApiFailureSchema, DiscoveryViewSchema, SavedDiscoverySchema, apiSuccessSchema, qlooTypeOf, type EntityType, type DiscoveryView } from "@/lib/contracts";
 import { REVIEWED_MAPPINGS } from "@/lib/music/mappings";
 import { newTestSecret } from "../helpers";
 
@@ -37,6 +37,7 @@ const REGISTRY_VIDEO_IDS = new Set(REVIEWED_MAPPINGS.flatMap((m) => [m.primary, 
 
 type Calls = { qlooSearch: number; qlooInsights: number; geminiDecision: number; geminiSong: number; youtube: number; other: string[] };
 let calls: Calls;
+let sourceFixture: { id: string; name: string; domain: EntityType };
 /** How the stubbed Gemini answers song selection: pick the LAST eligible ID (so it differs from the deterministic first). */
 let songBehaviour: "last" | "unknown_id" | "malformed" = "last";
 
@@ -51,7 +52,8 @@ function stubFetch() {
     const url = new URL(String(input instanceof Request ? input.url : input));
     if (url.hostname === "qloo.test" && url.pathname === "/search") {
       calls.qlooSearch += 1;
-      return json({ results: [{ entity_id: INTERSTELLAR, name: "Interstellar", types: ["urn:entity:movie"], properties: { release_year: 2014 } }] });
+      expect(url.searchParams.get("type")).toBe(qlooTypeOf(sourceFixture.domain));
+      return json({ results: [{ entity_id: sourceFixture.id, name: sourceFixture.name, types: [qlooTypeOf(sourceFixture.domain)] }] });
     }
     if (url.hostname === "qloo.test" && url.pathname === "/v2/insights") {
       calls.qlooInsights += 1;
@@ -102,7 +104,7 @@ const act = (v: DiscoveryView, action: string, extra: Record<string, unknown> = 
 
 /** Interstellar → music artists: start (asks), answer "like", finish. Returns the presenting view. */
 async function explore(): Promise<DiscoveryView> {
-  let v = await ok(await startRoute(post("/discovery/start", { entityQuery: "Interstellar", sourceType: "movie", targetType: "music_artist", maxQuestions: 3, selectedEntityId: INTERSTELLAR })));
+  let v = await ok(await startRoute(post("/discovery/start", { entityQuery: sourceFixture.name, sourceType: sourceFixture.domain, targetType: "music_artist", maxQuestions: 3, selectedEntityId: sourceFixture.id })));
   if (v.status === "asking") {
     const q = v.currentQuestion!;
     v = await ok(await answerRoute(post("/discovery/answer", { sessionToken: v.sessionToken, questionId: q.questionId, response: q.targetType === "tag" ? "like" : "prefer_a" })));
@@ -113,6 +115,7 @@ async function explore(): Promise<DiscoveryView> {
 }
 
 beforeEach(() => {
+  sourceFixture = { id: INTERSTELLAR, name: "Interstellar", domain: "movie" };
   calls = { qlooSearch: 0, qlooInsights: 0, geminiDecision: 0, geminiSong: 0, youtube: 0, other: [] };
   songBehaviour = "last";
   for (const [k, val] of Object.entries({
@@ -128,6 +131,36 @@ afterEach(() => {
 });
 
 describe("S9.12 listening journey over HTTP", () => {
+  it.each([
+    ["movie", INTERSTELLAR, "Interstellar"],
+    ["music_artist", "0D8EAFA4-CEEA-44D5-8E1F-26A8A9F49A77", "Nils Frahm"],
+    ["tv_show", "D03D0913-A7B9-4C46-BFEB-958C1B3FA387", "Breaking Bad"],
+    ["video_game", "FC14952D-5C27-48D8-908A-044ABD07FEAF", "Celeste"],
+    ["podcast", "B4D6B6FD-7146-4E1C-AE48-B8EBD2BB71DA", "Radiolab"],
+  ] as [EntityType, string, string][])("%s preserves source provenance through music, Gemini, feedback and save routes", async (domain, id, name) => {
+    sourceFixture = { id, name, domain };
+    vi.stubEnv("ADAPTIVE_POOL_ENABLED", "true");
+    let view = await explore();
+    expect(view.seed).toMatchObject({ entityId: id, entityType: domain, name });
+    view = await ok(await listen(view, A.johann));
+    expect(view.listening?.selection?.mode).toBe("GEMINI");
+    view = await ok(await act(view, "NOT_FOR_ME"));
+    expect(view.preferences.rejectedEntityIds).not.toContain(A.johann);
+    view = await ok(await act(view, "ANOTHER_SONG"));
+    view = await ok(await act(view, "SAVE"));
+    expect(view.listening?.saved[0]?.anchor).toEqual({ qlooId: id, name, domain });
+    view = await ok(await act(view, "LOVE", { artistIntent: "LIKE_ARTIST" }));
+    expect(view.preferences.positiveEntityIds).toContain(A.johann);
+    view = await ok(await act(view, "DIFFERENT_ARTIST"));
+    expect(view.listening?.artist?.entityId).not.toBe(A.johann);
+    view = await ok(await act(view, "FINISH"));
+    expect(view.listening?.status).toBe("finished");
+  });
+
+  it("keeps the genuinely rejected book source disabled before paid work", async () => {
+    await fail(await startRoute(post("/discovery/start", { entityQuery: "Dune (Dune, #1)", sourceType: "book", targetType: "music_artist", maxQuestions: 3, selectedEntityId: "9BA85467-2189-46DC-BB98-4B25EE182A9D" })), 400, "UNSUPPORTED_DOMAIN");
+    expect(calls.qlooInsights).toBe(0);
+  });
   it("Interstellar → Gemini-chosen verified song → NOT_FOR_ME → ANOTHER_SONG → DIFFERENT_ARTIST → LOVE → SAVE → FINISH", async () => {
     const programme = await explore();
     const explorationId = programme.sessionId;

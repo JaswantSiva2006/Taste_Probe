@@ -1,5 +1,19 @@
 # S9.14 release verification — PARTIAL
 
+## S9.14R recovery
+
+Recovery base `e208be1`, branch `seg/S9-14R-release-recovery`. Five music-source paths enabled with accurate evidence levels. Source choice is explicit. Books disabled after a real typed source was rejected by upstream artist Insights. Five complete fixture-backed route tests preserve source context through listening/Gemini/feedback/save; the sixth fixture verifies safe rejection.
+
+Production browser acceptance reached revision 4 with Nils Frahm as source, real Qloo, one real Gemini decision, Redis, official YouTube playback/pause, track dislike, and another song. It failed its Gemini-song assertion because only one eligible recording remained. This is expected deterministic behavior, not a fabricated model decision. Later live steps were not run. Combined Qloo allowance is exhausted at 18; Gemini usage verified directly from the authoritative Redis session is one request, $0.0006128.
+
+Secret audit: `npm run audit:release-secrets` checks all reachable Git blobs and the current client build against five currently configured secret values and rejects tracked environment files. Result: 928 Git objects and 18 client files, zero matches, zero tracked environment files. This is not proof against unknown historical or rotated credentials. No publication occurred.
+
+Recovery regression results: 530 tests passed, four skipped; build, lint (one unrelated existing warning), typecheck, mock/multi-round/listening smoke, standard/adaptive/song/wording evaluations passed. Passport browser QA passed 43/43, including real official YouTube playback with a fixture Qloo boundary, source selection, storage, widths 320–1440 and reduced motion. The generic browser harness needed two obsolete capability expectations updated; the corrected harness passed 17/17 with no hygiene or serious/critical axe problems. Multi-round browser QA passed 16/16.
+
+Added `vercel.json` for the existing Next.js build and `npm ci`. No authenticated GitHub/Vercel CLI or hosting token was found; no remote/project/URL exists. Publication/license choice and account access were requested. No license was silently chosen. Public release remains blocked pending these user-controlled prerequisites and final live acceptance.
+
+`qa:music` now targets the current Passport harness; `qa:listening` targets the recovery harness with persistent campaign checks. The old scripts remain historical source, not the advertised npm entry points. Expiry copy explains that saved Passport entries remain on this device. Session signing and absolute expiry were not changed.
+
 Baseline: `ee42607`. Branch: `seg/S9-14-six-domain-release-verification`.
 
 This is a partial engineering checkpoint, not a release candidate or six-domain PASS. The bounded real provider matrix is in `six-domain-music-capability-matrix.md`.
