@@ -99,6 +99,20 @@ A simulated listener loves H and passes on everything else. Results over 24 reco
 
 **Tests:** 618 passed, 4 skipped. New coverage includes walk provenance, budget, failure tolerance, scouting (exact match only), rejected seeds, redundancy regression, noisy-OR, bandit determinism, plan validation and namesake corroboration.
 
+**Live re-verification after the fixes** (approved; two fresh A.R. Rahman sessions, real Qloo/YouTube/Gemini). The simulated listener loved South Indian artists and passed on everything else.
+
+Session A, before the last two fixes below:
+- **Walk:** EXPAND Vijay Prakash (+35), EXPAND (+17), then one BLEND (+0). That made the blend's neighbourhood saturated, and no further blends ran. **9 walk calls in total**, versus 15 wasted previously.
+- **Path:** Sid Sriram was reached "Through Vijay Prakash". He is not in Qloo's top 50 for A.R. Rahman.
+- **Defect found:** it alternated between two loved artists. A short-window penalty (0.12 per play in the last four) was added.
+
+Session B, with the short-window penalty and evidence-gated YouTube lookups:
+- **Walk:** EXPAND (+35), EXPAND (+16), BLEND (+1 scouted). **6 walk calls.**
+- **Supply:** 30 playable artists, 95 verified recordings and 84 unseen. Session A had 24 playable artists.
+- **Picks:** every recommendation after turn 3 was in the listener's cluster, rotating across Sid Sriram, Naresh Iyer, Unnikrishnan and Srinivas, all reached through the walk.
+
+**YouTube spending:** proactive lookups (an unresolved artist that outranks the best playable one) now require listener evidence or a model-affinity favourite. Before the first reaction, the search budget is kept for what the listener's taste reveals.
+
 ## Limits
 
 - Walk quality depends on Qloo's neighbourhoods. Saturation and the budget bound the cost, not the outcome.

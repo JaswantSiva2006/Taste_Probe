@@ -1482,12 +1482,14 @@ async function adaptiveNext(t: Turn, listening: ListeningState, prepareOnly = fa
   // turn) when an unresolved artist outranks the best playable one: a likely favourite is
   // never left unreachable just because weaker supply exists.
   let lookups = 0;
+  const hasEvidence = trackSignals(l).size > 0 || l.artistFeedback.length > 0;
   while (lookup && quotaOpen() && lookups < (lookup.lookupBatch ? 2 : 3)) {
     const ordered = [...available.unresolved].sort((a, b) => priority(b) - priority(a));
     const first = ordered[0];
     if (!first) break;
     const best = available.ranks[0]?.option.artistId;
-    const wanted = available.policy.decision === "LOCAL_RESOLVE" || (lookups === 0 && (!best || priority(first) > priority(best) + 0.05));
+    // Proactive lookups follow the listener's own evidence; before any reaction the search budget is kept for what taste reveals.
+    const wanted = available.policy.decision === "LOCAL_RESOLVE" || (lookups === 0 && (hasEvidence || modelAffinity(l, first) > 0) && (!best || priority(first) > priority(best) + 0.05));
     if (!wanted) break;
     lookups++;
     const deferred = resolutions.some((r) => r.artistId === first && r.status === "DEFERRED");

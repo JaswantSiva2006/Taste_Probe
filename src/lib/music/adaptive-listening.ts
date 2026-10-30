@@ -182,11 +182,13 @@ export function rankRecordings(state: SessionState, l: ListeningState, inventory
     const share = recent.length ? recent.filter((e) => e.artistId === c.entityId).length / recent.length : 0;
     let consecutive = 0;
     for (const e of [...recent].reverse()) { if (e.artistId !== c.entityId) break; consecutive++; }
+    // S9.18: short window catches alternation between two favourites, which a consecutive count misses.
+    const lastFour = l.encounters.slice(-4).filter((e) => e.artistId === c.entityId).length;
     const reactions = signals.filter((s) => s.artistId === c.entityId);
     const negativePressure = reactions.reduce((n, s) => n + (s.weight < 0 ? -s.weight : 0), 0) / (1 + reactions.length);
     const recentSimilarity = recent.length ? recent.reduce((sum, e) => sum + overlap(tags, candidates.get(e.artistId)?.tags.map((t) => t.id) ?? []), 0) / recent.length : 0;
     // Contextual MMR-style soft redundancy, never a hard artist rotation or tag exclusion.
-    const diversityPenalty = 0.24 * share + 0.2 * Math.min(1, consecutive / 2) + 0.18 * negativePressure + 0.06 * recentSimilarity;
+    const diversityPenalty = 0.24 * share + 0.2 * Math.min(1, consecutive / 2) + 0.12 * lastFour + 0.18 * negativePressure + 0.06 * recentSimilarity;
     const score = baseScore - diversityPenalty;
     return [{ option, score, baseScore, diversityPenalty, anchor, answer, transfer, novelty, affinity, model, bucket, explore, evidenceRefs: [...(rel && rel.kind !== "starting_point" ? rel.seedIds.map((id) => `seed:${id}`) : []), ...new Set([`artist:${c.entityId}`, ...reactions.map((s) => `${s.source}:${s.videoId}`), ...(model ? [`model_affinity:${c.entityId}`] : []), ...taste.explicitAnswers.map((a) => `answer:${a.questionId}`), ...taste.featureEvidence.filter((f) => tags.includes(f.id)).flatMap((f) => f.references), ...(profile ? [profile.sourceRef] : [])])] }];
   }).sort((a, b) => b.score - a.score || a.option.videoId.localeCompare(b.option.videoId));
