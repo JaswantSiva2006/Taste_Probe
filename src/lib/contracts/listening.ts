@@ -59,6 +59,33 @@ export const SongSelectionSchema = z.object({
 });
 export type SongSelection = z.infer<typeof SongSelectionSchema>;
 
+/**
+ * S9.15 verified listening preview. A window of the CURRENT verified recording,
+ * computed and validated on the server; the client plays it with the official
+ * IFrame API (startSeconds/endSeconds) and never supplies its own bounds.
+ * - REVIEWED_SEGMENT: a person listened and approved the window (registry moment).
+ * - VERIFIED_TIMED_CUE: reserved for a legitimate timed source (none is used today).
+ * - GENERIC_PREVIEW: a timing-only excerpt; it makes no claim about the music.
+ */
+export const PREVIEW_SOURCE_KINDS = ["REVIEWED_SEGMENT", "VERIFIED_TIMED_CUE", "GENERIC_PREVIEW"] as const;
+export const PreviewSelectionSchema = z.object({
+  candidateId: z.string().min(1).max(64),
+  artistId: EntityId,
+  videoId: VideoId,
+  startSeconds: z.number().int().nonnegative(),
+  endSeconds: z.number().int().positive(),
+  durationSeconds: z.number().positive(),
+  sourceKind: z.enum(PREVIEW_SOURCE_KINDS),
+  /** GEMINI_GROUNDED: chosen among annotated reviewed segments; REVIEWED_DEFAULT: the only reviewed one; DETERMINISTIC: timing policy. */
+  selectionMethod: z.enum(["GEMINI_GROUNDED", "REVIEWED_DEFAULT", "DETERMINISTIC"]),
+  reasonCode: z.string().max(64),
+  reviewStatus: z.enum(["APPROVED", "TIMING_ONLY"]),
+  /** UI label, server-owned: "Featured preview" only for reviewed segments, otherwise "Quick preview". */
+  label: z.enum(["Featured preview", "Quick preview"]),
+  fallbackReason: z.string().max(64).nullable(),
+});
+export type PreviewSelection = z.infer<typeof PreviewSelectionSchema>;
+
 /** Canonical saved recording for browser-local Passport persistence (S9.13). */
 export const SavedDiscoverySchema = z.object({
   v: z.literal(1),
@@ -66,6 +93,11 @@ export const SavedDiscoverySchema = z.object({
   artist: z.object({ qlooId: EntityId, name: z.string().min(1).max(300), provenance: z.enum(["qloo", "mock"]) }),
   video: z.object({ videoId: VideoId, title: z.string(), channelTitle: z.string(), watchUrl: z.string().startsWith("https://www.youtube.com/watch?v="), provenance: z.enum(["reviewed_mapping", "youtube_data_api"]) }),
   anchor: z.object({ qlooId: EntityId, name: z.string(), domain: z.string() }),
+  /** S9.15 optional metadata: the verified preview window offered with this recording. Never replaces videoId. */
+  preview: z
+    .object({ startSeconds: z.number().int().nonnegative(), endSeconds: z.number().int().positive(), sourceKind: z.enum(PREVIEW_SOURCE_KINDS) })
+    .refine((p) => p.endSeconds > p.startSeconds)
+    .optional(),
 });
 export type SavedDiscovery = z.infer<typeof SavedDiscoverySchema>;
 
@@ -90,6 +122,9 @@ export const ListeningStateSchema = z.object({
   navigation: z.array(z.object({ action: z.enum(["NEXT", "ANOTHER_SONG", "DIFFERENT_ARTIST", "START", "PREVIOUS"]), artistId: EntityId.nullable(), videoId: VideoId.nullable(), at, revision: rev })).max(200),
   saved: z.array(SavedDiscoverySchema).max(50),
   geminiSongRequests: z.number().int().nonnegative(),
+  /** S9.15: preview window for the current recording (optional: older sessions parse unchanged). */
+  preview: PreviewSelectionSchema.nullable().optional(),
+  geminiPreviewRequests: z.number().int().nonnegative().optional(),
 });
 export type ListeningState = z.infer<typeof ListeningStateSchema>;
 
@@ -109,5 +144,7 @@ export const ListeningViewSchema = z.object({
   history: z.array(z.object({ artistId: EntityId, artistName: z.string(), videoId: VideoId, title: z.string(), feedback: z.enum(["love", "not_for_me"]).nullable() })),
   saved: z.array(SavedDiscoverySchema),
   geminiSongRequests: z.number().int().nonnegative(),
+  /** S9.15: validated preview of `video` (null: full playback only). */
+  preview: PreviewSelectionSchema.nullable(),
 });
 export type ListeningView = z.infer<typeof ListeningViewSchema>;

@@ -22,7 +22,7 @@ export async function hygiene(page, label) {
       .slice(0, 6)
       .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)}`);
     const broken = [...document.images].filter((i) => i.complete && i.naturalWidth === 0).map((i) => i.src);
-    const smallTargets = [...document.querySelectorAll("button, a, input:not([type=radio]), summary, label.tp-world, label.tp-chip")]
+    const smallTargets = [...document.querySelectorAll("button, a, input:not([type=radio]), summary, label.ah-input")]
       .filter((el) => {
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0 && (r.height < 24 || r.width < 24);
@@ -44,23 +44,27 @@ export async function axeScan(page) {
   });
 }
 
-export async function chooseWorld(page, label, viaKeyboard = false) {
-  const radio = page.getByRole("radio", { name: new RegExp(`^${label}`) });
-  if (viaKeyboard) {
-    await radio.focus();
-    await page.keyboard.press("Space");
-  } else {
-    await page.locator(".tp-world", { hasText: label }).click();
-  }
-  assert.equal(await radio.isChecked(), true, `${label} chosen`);
-  await page.waitForSelector(".tp-step--anchor");
+/** S9.15: music is the only destination, so there is no destination picker to operate. */
+export async function expectNoDestinationPicker(page) {
+  assert.equal(await page.locator('input[name="tp-target"]').count(), 0, "no destination choice is offered");
 }
 
-export async function chooseSource(page, label) {
-  const radio = page.getByRole("radio", { name: label, exact: true });
-  if (!(await radio.isChecked())) await page.locator(".tp-chip", { hasText: label }).click();
-  assert.equal(await radio.isChecked(), true, `${label} chosen as anchor domain`);
-  await page.waitForSelector("#tp-anchor");
+/** Chooses a starting point ("Movies", "Artists", "TV shows", "Games", "Podcasts"). */
+const LEGACY_LABELS = { "a movie": "Movies", "a music artist": "Artists", "a TV show": "TV shows", "a video game": "Games", "a podcast": "Podcasts" };
+
+export async function chooseSource(page, given, viaKeyboard = false) {
+  const label = LEGACY_LABELS[given] ?? given;
+  const radio = page.getByRole("radio", { name: new RegExp(`^${label}\\b`) });
+  if (!(await radio.isChecked())) {
+    if (viaKeyboard) {
+      await radio.focus();
+      await page.keyboard.press("Space");
+    } else {
+      await page.locator(".ah-input", { hasText: label }).click();
+    }
+  }
+  assert.equal(await radio.isChecked(), true, `${label} chosen as starting point`);
+  await page.waitForSelector("#tp-anchor:not([disabled])");
 }
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -69,14 +73,14 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export async function searchAndSelect(page, query, exactName, { viaKeyboard = false, timeout = 30_000 } = {}) {
   await page.fill("#tp-anchor", query);
   await page.press("#tp-anchor", "Enter");
-  await page.waitForSelector(".tp-ticket, .tp-results__empty, .tp-error", { timeout });
+  await page.waitForSelector(".ah-result, .ah-results__empty, .tp-error", { timeout });
   if (await page.locator(".tp-error").count()) throw new Error(`search failed in the UI: ${await page.textContent(".tp-error")}`);
-  assert.ok(await page.locator(".tp-ticket").count(), `no results for "${query}"`);
-  assert.equal(await page.locator('.tp-ticket[aria-pressed="true"]').count(), 0, "a search never auto-selects");
-  assert.ok(await page.getByRole("button", { name: /^Pick your|^Begin with/ }).isDisabled(), "cannot start before an explicit selection");
+  assert.ok(await page.locator(".ah-result").count(), `no results for "${query}"`);
+  assert.equal(await page.locator('.ah-result[aria-pressed="true"]').count(), 0, "a search never auto-selects");
+  assert.ok(await page.getByRole("button", { name: /^Choose one to continue|^Discover music from/ }).isDisabled(), "cannot start before an explicit selection");
   const exact = page
-    .locator(".tp-ticket")
-    .filter({ has: page.locator(".tp-ticket__title", { hasText: new RegExp(`^${escapeRe(exactName)}$`) }) })
+    .locator(".ah-result")
+    .filter({ has: page.locator(".ah-result__title", { hasText: new RegExp(`^${escapeRe(exactName)}$`) }) })
     .first();
   if (viaKeyboard) {
     await exact.focus();
@@ -85,11 +89,16 @@ export async function searchAndSelect(page, query, exactName, { viaKeyboard = fa
     await exact.click();
   }
   assert.equal(await exact.getAttribute("aria-pressed"), "true");
-  return { results: await page.locator(".tp-ticket").count() };
+  return { results: await page.locator(".ah-result").count() };
 }
 
 export async function begin(page, { timeout = 30_000 } = {}) {
-  await page.getByRole("button", { name: /^Begin with/ }).click();
+  await page.getByRole("button", { name: /^Discover music from/ }).click();
   await page.waitForSelector("#tp-question, #tp-programme-title, .tp-error", { timeout });
   if (await page.locator(".tp-error").count()) throw new Error(`start failed in the UI: ${await page.textContent(".tp-error")}`);
+}
+
+/** S9.15 compatibility for older (live, opt-in) scripts: there is no destination step any more. */
+export async function chooseWorld(page) {
+  await expectNoDestinationPicker(page);
 }

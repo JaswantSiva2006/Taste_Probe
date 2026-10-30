@@ -1,4 +1,28 @@
-# S9.14 handoff — not yet ready for S10
+# Release handoff
+
+## S9.15 current handoff — music-only product
+
+Branch `seg/S9-15-music-only-rebrand-previews`, based on `fbbaf38`. See `music-final-polish.md`.
+
+**What the public product is:** music discovery only.
+- **Starting points:** five (movie, music artist, TV show, video game, podcast). Music is always the destination. There is no destination choice and no public book path.
+- **Server enforcement:** production is `publicScope: music_only`, so `/api/health` publishes only music pairs and Start refuses any other destination before a provider call. `LEGACY_GENERIC_JOURNEYS` is refused in production.
+- **Book evidence:** the earlier book work is preserved in the registry (`book → music_artist` disabled and INCONCLUSIVE after the S9.14 upstream rejection). Do not claim that Books → Music works.
+
+**Listening:**
+- Every verified recording with a known duration of at least 45 seconds offers a server-validated 30-second **Quick preview** (timing only, not a highlight) and **Listen in full**, through the official IFrame player.
+- No reviewed segments exist yet, so Gemini preview selection, which needs annotated human-reviewed segments, has not run live. Do not claim Gemini listened to anything or curated a highlight.
+
+**Deployment prerequisites (unchanged from S9.14R):**
+- Repository owner/name and licence approval.
+- Authenticated hosting.
+- Production secrets entered in the host's protected settings.
+- `npm run audit:release-secrets` run before publication.
+- The Qloo campaign ledger stays at 18/18; any further live Qloo use needs separate authorization.
+
+**Next:** deployment (S10) is not started.
+
+## S9.14 handoff (historical) — not yet ready for S10
 
 ## S9.14R current handoff
 

@@ -9,6 +9,27 @@ import { REVIEWED_MAPPINGS } from "@/lib/music/mappings";
 import { newTestSecret } from "../helpers";
 
 /**
+ * S9.15: no registry moment is APPROVED, so the grounded-preview path can only be exercised
+ * with fixture moments. They are injected here, in tests only, and labelled as fixtures.
+ */
+const fixture = vi.hoisted(() => ({ groundedMoments: false }));
+vi.mock("@/lib/music/mappings", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/music/mappings")>();
+  const moment = (startSeconds: number, endSeconds: number, note: string) => ({
+    videoId: "aXlx-YnvgKU", startSeconds, endSeconds, status: "APPROVED" as const, provenance: "human_curated" as const,
+    reviewedBy: "test-fixture", reviewedAt: "2026-10-30", note,
+  });
+  return {
+    ...actual,
+    reviewedMappingFor: (id: string) => {
+      const m = actual.reviewedMappingFor(id);
+      if (!fixture.groundedMoments || !m || id !== "5AD69C26-F5C4-482F-9C8B-E3B7432F2FDC") return m;
+      return { ...m, moments: [moment(60, 90, "FIXTURE: solo piano theme"), moment(200, 230, "FIXTURE: full string ensemble")] };
+    },
+  };
+});
+
+/**
  * S9.12 listening loop through the REAL HTTP route handlers in live mode. External
  * providers are mocked at the fetch boundary only: a Qloo stub (search + Insights) and
  * a Gemini stub that answers the decision agent and the song selector. No YouTube key,
@@ -35,11 +56,13 @@ const artist = (id: string, affinity: number, tags = [AMBIENT, PIANO]) => ({ ent
 const BASE_ARTISTS = [artist(A.johann, 0.99), artist(A.richter, 0.98), artist(A.olafur, 0.97), artist(A.goldmund, 0.96, [AMBIENT]), artist(A.eluvium, 0.95, [AMBIENT]), artist(A.mendes, 0.9, [PIANO])];
 const REGISTRY_VIDEO_IDS = new Set(REVIEWED_MAPPINGS.flatMap((m) => [m.primary, ...m.alternates].map((v) => v.videoId)));
 
-type Calls = { qlooSearch: number; qlooInsights: number; geminiDecision: number; geminiSong: number; youtube: number; other: string[] };
+type Calls = { qlooSearch: number; qlooInsights: number; geminiDecision: number; geminiSong: number; geminiPreview: number; youtube: number; other: string[] };
 let calls: Calls;
 let sourceFixture: { id: string; name: string; domain: EntityType };
 /** How the stubbed Gemini answers song selection: pick the LAST eligible ID (so it differs from the deterministic first). */
-let songBehaviour: "last" | "unknown_id" | "malformed" = "last";
+let songBehaviour: "last" | "first" | "unknown_id" | "malformed" = "last";
+/** S9.15 preview stub: pick the LAST candidate, invent one, or answer with prose. */
+let previewBehaviour: "last" | "invented" | "malformed" = "last";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const geminiCall = (name: string, args: Record<string, unknown>) => ({
@@ -65,12 +88,19 @@ function stubFetch() {
     if (url.hostname === "generativelanguage.googleapis.com") {
       const body = JSON.parse(String(init?.body)) as { tools: Array<{ functionDeclarations: Array<{ name: string; parameters: { properties: Record<string, { enum?: string[] }> } }> }>; toolConfig: { functionCallingConfig: { allowedFunctionNames: string[] } } };
       const decls = body.tools[0]!.functionDeclarations;
+      const pv = decls.find((d) => d.name === "select_preview_window");
+      if (pv) {
+        calls.geminiPreview += 1;
+        const ids = pv.parameters.properties.candidateId!.enum!;
+        if (previewBehaviour === "malformed") return json({ candidates: [{ content: { parts: [{ text: "Start at the chorus, 1:00." }] } }] });
+        return json(geminiCall("select_preview_window", { candidateId: previewBehaviour === "invented" ? "rs-1-999" : ids.at(-1), reasonCode: "fits_confirmed_preferences" }));
+      }
       const song = decls.find((d) => d.name === "select_verified_song");
       if (song) {
         calls.geminiSong += 1;
         const ids = song.parameters.properties.videoId!.enum!;
         if (songBehaviour === "malformed") return json({ candidates: [{ content: { parts: [{ text: "I think the second one sounds dreamier." }] } }] });
-        return json(geminiCall("select_verified_song", { videoId: songBehaviour === "unknown_id" ? "ZZZZZZZZZZZ" : ids.at(-1), reasonCode: "closest_to_loved_recordings" }));
+        return json(geminiCall("select_verified_song", { videoId: songBehaviour === "unknown_id" ? "ZZZZZZZZZZZ" : songBehaviour === "first" ? ids[0] : ids.at(-1), reasonCode: "closest_to_loved_recordings" }));
       }
       calls.geminiDecision += 1;
       const allowed = body.toolConfig.functionCallingConfig.allowedFunctionNames;
@@ -116,8 +146,10 @@ async function explore(): Promise<DiscoveryView> {
 
 beforeEach(() => {
   sourceFixture = { id: INTERSTELLAR, name: "Interstellar", domain: "movie" };
-  calls = { qlooSearch: 0, qlooInsights: 0, geminiDecision: 0, geminiSong: 0, youtube: 0, other: [] };
+  calls = { qlooSearch: 0, qlooInsights: 0, geminiDecision: 0, geminiSong: 0, geminiPreview: 0, youtube: 0, other: [] };
   songBehaviour = "last";
+  previewBehaviour = "last";
+  fixture.groundedMoments = false;
   for (const [k, val] of Object.entries({
     NODE_ENV: "test", QLOO_MODE: "live", QLOO_API_KEY: "qloo-test-key", QLOO_BASE_URL: "https://qloo.test",
     LLM_PROVIDER: "google", LLM_MODEL: "gemini-3.5-flash-lite", GOOGLE_API_KEY: "gemini-test-key", YOUTUBE_API_KEY: "",
@@ -333,5 +365,80 @@ describe("S9.12 listening journey over HTTP", () => {
     await fail(await listenRoute(post("/discovery/listen", { sessionToken: `${programme.sessionToken}x` })), 401, "INVALID_SESSION_TOKEN");
     await fail(await feedbackRoute(post("/discovery/feedback", { sessionToken: programme.sessionToken, artistId: A.johann, videoId: "aXlx-YnvgKU", action: "LOVE" })), 409, "LISTENING_NOT_STARTED");
     await fail(await feedbackRoute(post("/discovery/feedback", { sessionToken: programme.sessionToken, artistId: A.johann, videoId: "../../etc", action: "LOVE" })), 400, "VALIDATION_ERROR");
+  });
+});
+
+describe("S9.15 verified previews over HTTP", () => {
+  const durationOf = (v: DiscoveryView) => v.listening!.video!.durationSeconds!;
+
+  it("timing-only previews: deterministic Quick preview of the presented recording, no Gemini preview call, recomputed per recording", async () => {
+    const v1 = await ok(await listen(await explore(), A.johann));
+    const p1 = v1.listening!.preview!;
+    expect(p1).toMatchObject({ videoId: v1.listening!.video!.videoId, artistId: A.johann, sourceKind: "GENERIC_PREVIEW", label: "Quick preview", selectionMethod: "DETERMINISTIC", reviewStatus: "TIMING_ONLY", fallbackReason: "timing_only_candidates" });
+    expect(p1.endSeconds - p1.startSeconds).toBe(30);
+    expect(p1.startSeconds).toBeGreaterThan(0);
+    expect(p1.endSeconds).toBeLessThanOrEqual(durationOf(v1));
+    expect(calls.geminiPreview).toBe(0);
+    // Track feedback leaves the recording and its preview untouched; previews never create feedback.
+    const v2 = await ok(await act(v1, "LOVE"));
+    expect(v2.listening!.preview).toEqual(p1);
+    expect(v2.listening!.currentFeedback).toBe("love");
+    // A different recording gets its own preview; the old window never follows it.
+    const v3 = await ok(await act(v2, "ANOTHER_SONG"));
+    expect(v3.listening!.video!.videoId).not.toBe(p1.videoId);
+    expect(v3.listening!.preview!.videoId).toBe(v3.listening!.video!.videoId);
+    expect(calls.geminiPreview).toBe(0);
+  });
+
+  it("SAVE keeps the exact canonical recording and adds the verified window as optional metadata", async () => {
+    const v1 = await ok(await listen(await explore(), A.johann));
+    const v2 = await ok(await act(v1, "SAVE"));
+    const saved = SavedDiscoverySchema.parse(v2.listening!.saved[0]);
+    expect(saved.video.videoId).toBe(v1.listening!.video!.videoId);
+    expect(saved.video.watchUrl).toBe(`https://www.youtube.com/watch?v=${v1.listening!.video!.videoId}`);
+    expect(saved.preview).toEqual({ startSeconds: v1.listening!.preview!.startSeconds, endSeconds: v1.listening!.preview!.endSeconds, sourceKind: "GENERIC_PREVIEW" });
+  });
+
+  it("grounded fixture segments: Gemini chooses a reviewed window by ID; the server supplies the bounds", async () => {
+    fixture.groundedMoments = true;
+    songBehaviour = "first"; // present the recording that has the (fixture) reviewed segments
+    const v1 = await ok(await listen(await explore(), A.johann));
+    expect(v1.listening!.video!.videoId).toBe("aXlx-YnvgKU");
+    expect(calls.geminiPreview).toBe(1);
+    expect(v1.listening!.preview).toMatchObject({ candidateId: "rs-200-230", startSeconds: 200, endSeconds: 230, sourceKind: "REVIEWED_SEGMENT", label: "Featured preview", selectionMethod: "GEMINI_GROUNDED", reasonCode: "fits_confirmed_preferences", reviewStatus: "APPROVED" });
+  });
+
+  it("grounded fixture segments: invented or prose answers fall back to the first reviewed window, still charged", async () => {
+    fixture.groundedMoments = true;
+    songBehaviour = "first";
+    for (const behaviour of ["invented", "malformed"] as const) {
+      previewBehaviour = behaviour;
+      const before = calls.geminiPreview;
+      const v = await ok(await listen(await explore(), A.johann));
+      expect(calls.geminiPreview).toBe(before + 1);
+      expect(v.listening!.preview).toMatchObject({ startSeconds: 60, endSeconds: 90, selectionMethod: "REVIEWED_DEFAULT", label: "Featured preview", fallbackReason: behaviour === "invented" ? "gemini_invalid_candidate" : "gemini_missing_function_call" });
+    }
+  });
+
+  it("grounded fixture segments: an exhausted exploration Gemini budget means no preview call", async () => {
+    fixture.groundedMoments = true;
+    songBehaviour = "first";
+    const programme = await explore();
+    const used = calls.geminiDecision;
+    vi.stubEnv("MAX_GEMINI_REQUESTS_PER_EXPLORATION", String(used + 1)); // room for the song choice only
+    const v = await ok(await listen(programme, A.johann));
+    expect(calls.geminiSong).toBe(1);
+    expect(calls.geminiPreview).toBe(0);
+    expect(v.listening!.preview).toMatchObject({ selectionMethod: "REVIEWED_DEFAULT", fallbackReason: "exploration_gemini_budget_exhausted" });
+  });
+
+  it("preview selection makes no Qloo or YouTube calls", async () => {
+    const programme = await explore();
+    const before = { ...calls };
+    const v = await ok(await listen(programme, A.johann));
+    await ok(await act(v, "ANOTHER_SONG"));
+    expect(calls.qlooInsights).toBe(before.qlooInsights);
+    expect(calls.qlooSearch).toBe(before.qlooSearch);
+    expect(calls.youtube).toBe(0);
   });
 });

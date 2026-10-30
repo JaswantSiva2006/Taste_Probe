@@ -187,3 +187,39 @@ export const PassportIcon = (p: IconProps) => (
     <path d="M9 17h6" />
   </Base>
 );
+
+/* S9.15 source-selector and preview icons (same 1.5px family). */
+export const Film = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 9.5h16v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z" />
+    <path d="M4 9.5l-.4-2.6a1.2 1.2 0 0 1 1-1.4l13.8-2a1.2 1.2 0 0 1 1.4 1l.4 2.6L4 9.5z" />
+    <path d="M8.2 5.3l2.4 3.3M12.6 4.7l2.4 3.3" />
+  </Base>
+);
+export const Note = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M9 17.5V6l10-2v11" />
+    <circle cx="6.5" cy="17.5" r="2.5" />
+    <circle cx="16.5" cy="15" r="2.5" />
+  </Base>
+);
+export const Broadcast = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="9.5" y="4" width="5" height="9" rx="2.5" />
+    <path d="M7 10.5a5 5 0 0 0 10 0M12 15.5V20M9 20h6" />
+    <path d="M4.5 7.5a8.5 8.5 0 0 0 0 6M19.5 7.5a8.5 8.5 0 0 1 0 6" />
+  </Base>
+);
+/** A bounded excerpt: brackets around a play mark. */
+export const Excerpt = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M7 5H4.5v14H7M17 5h2.5v14H17" />
+    <path d="M10 9l5 3-5 3z" />
+  </Base>
+);
+export const FullTrack = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 8h16M4 12h16M4 16h10" />
+    <path d="M17 14.5l3.5 2-3.5 2z" />
+  </Base>
+);

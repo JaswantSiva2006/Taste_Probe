@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiClientError } from "@/lib/api-client";
 import type { ArtistIntent, DiscoveryView, EntitySummary, EntityType, ListeningAction, PreferenceResponse, ProviderMode } from "@/lib/contracts";
+import { MUSIC_DESTINATION } from "@/lib/contracts/capabilities";
 import { isOfferedPair, sourceChoices, targetChoices } from "@/lib/ui/domains";
 import { createNameBook, friendlyError, type FriendlyError } from "@/lib/ui/presentation";
 import { passport, usePassport } from "@/lib/ui/passport-store";
-import { PassportIcon, Refresh, Reel } from "./Icons";
+import { PassportIcon, Refresh, Vinyl } from "./Icons";
 import { ListeningStage } from "./music/ListeningStage";
 import { PassportView } from "./music/PassportView";
 import { Landing, type Capabilities } from "./Landing";
@@ -19,7 +20,8 @@ type ShownError = FriendlyError & { code: string; requestId?: string; retry?: ()
 /**
  * State machine (derived from the server contracts):
  *   capabilities: loading → ready | error (retry)
- *   onboarding:   target → source (filtered by target) → search → explicit selection → start
+ *   onboarding:   starting point (music sources from the server) → search → explicit selection → start
+ *                 (S9.15: music is the only destination; the user never chooses one)
  *   discovery:    view.status === "asking"  (answer → revision+1, or finish)
  *   finale:       view.status === "finished" (Discovery Path), restart → onboarding
  * Every transition is a real API response; the browser never decides availability.
@@ -27,7 +29,6 @@ type ShownError = FriendlyError & { code: string; requestId?: string; retry?: ()
 export function DiscoveryApp() {
   const [mode, setMode] = useState<ProviderMode | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities>({ status: "loading" });
-  const [chosenTarget, setTarget] = useState<string | null>(null);
   const [source, setSource] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [searchedFor, setSearchedFor] = useState<string | null>(null);
@@ -47,9 +48,8 @@ export function DiscoveryApp() {
   const lastAction = useRef<Pending>(null);
 
   const pairs = useMemo(() => (capabilities.status === "ready" ? capabilities.pairs : []), [capabilities]);
-  // With a single destination there is nothing to choose; the anchor step opens directly.
-  const targets = targetChoices(pairs);
-  const target = chosenTarget ?? (targets.length === 1 ? targets[0]!.domain : null);
+  // S9.15: music is the fixed destination, offered only if the server publishes it.
+  const target = targetChoices(pairs).some((t) => t.domain === MUSIC_DESTINATION) ? MUSIC_DESTINATION : null;
 
   const fetchCapabilities = useCallback(() => {
     api.health().then(
@@ -122,20 +122,6 @@ export function DiscoveryApp() {
     if (v.listening?.saved.length) passport.merge(v.listening.saved);
     setView(v);
   };
-
-  function chooseTarget(domain: string) {
-    setTarget(domain);
-    const allowed = sourceChoices(pairs, domain);
-    // Keep the anchor only if the new destination still allows it; a lone option is pre-chosen.
-    const keep = source && allowed.some((s) => s.domain === source) ? source : allowed.length === 1 ? allowed[0]!.domain : null;
-    if (keep !== source) {
-      setSource(keep);
-      setResults(null);
-      setSelected(null);
-      setSearchedFor(null);
-    }
-    setError(null);
-  }
 
   function chooseSource(domain: string) {
     if (domain === source) return;
@@ -254,23 +240,20 @@ export function DiscoveryApp() {
     requestAnimationFrame(() => document.getElementById(view?.targetType === "music_artist" ? "tp-listen-title" : "tp-programme-title")?.focus());
   }
 
-  /** S9.13 landing: "Start exploring" opens the music journey (Sound Passport). */
+  /** Landing "Start discovering": goes to the starting-point selector. Nothing is preselected. */
   function startMusic() {
-    setScreen("app");
-    if (view) restart(true);
-    chooseTarget("music_artist");
-    // The primary CTA starts with an explicit cultural-source choice.
-    setSource(null);
-    setSelected(null);
-    setResults(null);
+    if (view || screen !== "app") restart(true);
+    setError(null);
     requestAnimationFrame(() => {
-      const el = document.querySelector<HTMLElement>('.tp-step--anchor input[type="radio"]') ?? document.querySelector<HTMLElement>(".tp-step--anchor");
-      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const panel = document.getElementById("tp-plan");
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      panel?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+      const el = document.querySelector<HTMLElement>('input[name="tp-source"]:checked') ?? document.querySelector<HTMLElement>('input[name="tp-source"]');
       el?.focus({ preventScroll: true });
     });
   }
 
-  /** Back to the start: a new world (default) or the same world with a new anchor. */
+  /** Back to the start: a fresh starting point (default), or the same starting point with a new search. */
   function restart(keepWorld = false) {
     setScreen("app");
     setView(null);
@@ -279,12 +262,9 @@ export function DiscoveryApp() {
     setResults(null);
     setSearchedFor(null);
     setQuery("");
-    if (!keepWorld) {
-      setTarget(null);
-      setSource(null);
-    }
+    if (!keepWorld) setSource(null);
     requestAnimationFrame(() => {
-      const focus = keepWorld ? document.getElementById("tp-anchor") : document.querySelector<HTMLInputElement>('input[name="tp-target"]');
+      const focus = keepWorld && source ? document.getElementById("tp-anchor") : document.getElementById("tp-hero-title");
       (focus ?? document.getElementById("tp-hero-title"))?.focus();
     });
   }
@@ -305,7 +285,7 @@ export function DiscoveryApp() {
 
       <header className="tp-top">
         <button type="button" className="tp-brand" onClick={() => restart()} disabled={busy} aria-label="TasteProbe, start a new exploration">
-          <Reel size={22} />
+          <Vinyl size={22} />
           <span>TasteProbe</span>
         </button>
         <button type="button" className="sp-navpass" onClick={screen === "passport" ? closePassport : openPassport} aria-pressed={screen === "passport"}>
@@ -350,7 +330,6 @@ export function DiscoveryApp() {
             capabilities={capabilities}
             onRetryCapabilities={retryCapabilities}
             target={target}
-            onTarget={chooseTarget}
             source={source}
             onSource={chooseSource}
             query={query}

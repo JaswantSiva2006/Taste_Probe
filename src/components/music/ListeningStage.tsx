@@ -8,7 +8,9 @@ import {
   AnotherSong,
   ArrowRight,
   DifferentArtist,
+  Excerpt,
   ExternalLink,
+  FullTrack,
   Heart,
   NotForMe,
   PassportIcon,
@@ -22,7 +24,8 @@ import {
   Stamp,
 } from "../Icons";
 import { VinylDisc, type VinylState } from "./VinylDisc";
-import { YouTubePlayer, type PlayerHandle, type PlayerPhase } from "./YouTubePlayer";
+import { clock, rangeLabel } from "@/lib/ui/preview-guard";
+import { YouTubePlayer, type PlaybackState, type PlayerHandle, type PlayerPhase } from "./YouTubePlayer";
 
 /**
  * S9.13 Listening Stage — the music journey's main event.
@@ -61,7 +64,8 @@ const NOTICE_COPY: Record<string, string> = {
 
 const searchUrl = (name: string) => `https://www.youtube.com/results?${new URLSearchParams({ search_query: name.slice(0, 120) })}`;
 
-function vinylState(phase: PlayerPhase | null): VinylState {
+function vinylState(phase: PlayerPhase | null, previewEnded = false): VinylState {
+  if (previewEnded) return "idle";
   if (phase === "playing") return "playing";
   if (phase === "paused") return "paused";
   if (phase === "buffering") return "buffering";
@@ -72,10 +76,11 @@ function vinylState(phase: PlayerPhase | null): VinylState {
 export function ListeningStage({ view, busy, pending, passportCount, onListen, onAction, onOpenPassport }: Props) {
   const l = view.listening;
   const player = useRef<PlayerHandle>(null);
-  const [phase, setPhase] = useState<PlayerPhase | null>(null);
+  const [playback, setPlayback] = useState<PlaybackState | null>(null);
+  const phase = playback?.phase ?? null;
   const [confirm, setConfirm] = useState<{ key: string; text: string } | null>(null);
   const lastAction = useRef<{ action: ListeningAction; intent?: ArtistIntent; revision: number } | null>(null);
-  const onPhase = useCallback((p: PlayerPhase) => setPhase(p), []);
+  const onPlayback = useCallback((s: PlaybackState) => setPlayback(s), []);
 
   // Truthful confirmation: shown only once the server's new state has arrived.
   useEffect(() => {
@@ -231,6 +236,9 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
   const passed = l.currentFeedback === "not_for_me";
   const prev = [...l.history].reverse().find((h) => h.videoId !== video.videoId);
   const selection = l.selection ? SELECTION_COPY[l.selection.mode]?.replace("{n}", String(l.selection.eligibleCount)) : null;
+  const preview = l.preview && l.preview.videoId === video.videoId ? l.preview : null;
+  const mode = playback?.mode ?? (preview ? "preview" : "full");
+  const previewEnded = Boolean(playback?.previewEnded);
   const notice = l.notice ? NOTICE_COPY[l.notice] : null;
 
   return (
@@ -257,16 +265,26 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
           <div className="sp-screen">
             <YouTubePlayer
               key={video.videoId}
-              bare
               controlsRef={player}
-              onPhase={onPhase}
+              onPlayback={onPlayback}
               artistName={artist.name}
               videos={[{ ...video }]}
-              moment={null}
+              preview={preview ? { startSeconds: preview.startSeconds, endSeconds: preview.endSeconds } : null}
               fallbackUrl={searchUrl(artist.name)}
               fallbackLabel={`Search for ${artist.name} on YouTube`}
             />
           </div>
+
+          <ListenModes
+            preview={preview}
+            durationSeconds={video.durationSeconds ?? null}
+            mode={mode}
+            previewEnded={previewEnded}
+            phase={phase}
+            disabled={!canTransport}
+            onPreview={() => player.current?.playPreview()}
+            onFull={() => player.current?.playFull()}
+          />
 
           <div className="sp-transport" role="group" aria-label="Playback">
             <button type="button" className="sp-tbtn" disabled={busy || !prev} onClick={() => prev && onListen(prev.artistId, prev.videoId)} aria-label={prev ? `Previous recording: ${prev.title}` : "No previous recording"} title="Previous recording">
@@ -275,17 +293,17 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
             <button type="button" className="sp-tbtn" disabled={!canTransport || phase === "ready"} onClick={() => player.current?.rewind(10)} aria-label="Back 10 seconds" title="Back 10 seconds">
               <Rewind10 size={24} />
             </button>
-            <button type="button" className="sp-tbtn sp-tbtn--play" disabled={!canTransport} onClick={() => player.current?.toggle()} aria-label={playing ? "Pause" : phase === "paused" ? "Resume" : "Play"}>
+            <button type="button" className="sp-tbtn sp-tbtn--play" disabled={!canTransport} onClick={() => player.current?.toggle()} aria-label={playing ? "Pause" : phase === "paused" && !previewEnded ? "Resume" : mode === "preview" ? "Play preview" : "Play"}>
               {playing ? <Pause size={26} /> : <Play size={26} />}
             </button>
-            <button type="button" className="sp-tbtn" disabled={!canTransport} onClick={() => player.current?.replay()} aria-label="Replay from the start" title="Replay from the start">
+            <button type="button" className="sp-tbtn" disabled={!canTransport} onClick={() => player.current?.replay()} aria-label={mode === "preview" ? "Replay the preview" : "Replay from the start"} title={mode === "preview" ? "Replay the preview" : "Replay from the start"}>
               <Replay size={24} />
             </button>
             <button type="button" className="sp-tbtn" disabled={busy} onClick={() => act("NEXT")} aria-label="Next recording (no rating)" title="Next recording">
               <SkipForward size={22} />
             </button>
             <span className="sp-transport__state" aria-hidden="true">
-              {phase === "playing" ? "Playing" : phase === "paused" ? "Paused" : phase === "buffering" ? "Loading…" : phase === "failed" ? "Unavailable" : phase === "ended" ? "Ended" : "Ready"}
+              {previewEnded ? "Preview finished" : phase === "playing" ? (mode === "preview" ? "Previewing" : "Playing") : phase === "paused" ? "Paused" : phase === "buffering" ? "Loading…" : phase === "failed" ? "Unavailable" : phase === "ended" ? "Ended" : "Ready"}
             </span>
             <a className="sp-transport__yt" href={video.watchUrl} target="_blank" rel="noopener noreferrer">
               <ExternalLink size={16} /> Open on YouTube
@@ -347,7 +365,7 @@ export function ListeningStage({ view, busy, pending, passportCount, onListen, o
 
         <aside className="sp-stage__side" aria-label="About this listen">
           <div className="sp-deck">
-            <VinylDisc key={video.videoId} state={vinylState(phase)} seed={artist.entityId} artist={artist.name} title={video.title} size="lg" />
+            <VinylDisc key={video.videoId} state={vinylState(phase, previewEnded)} seed={artist.entityId} artist={artist.name} title={video.title} size="lg" />
           </div>
 
           <div className="sp-artist">
@@ -427,5 +445,70 @@ function Journey({ seed, artist, recording }: { seed: string; artist?: string; r
         <span className="sp-journey__v">{recording ?? "Not chosen yet"}</span>
       </li>
     </ol>
+  );
+}
+
+/**
+ * S9.15 Preview / Full. Truthful labels only: "Quick preview" is a timed excerpt with no
+ * claim about the music; "Featured preview" is a window a person reviewed. Switching
+ * modes is local playback only: it never reaches the server and is never feedback.
+ */
+function ListenModes({
+  preview,
+  durationSeconds,
+  mode,
+  previewEnded,
+  phase,
+  disabled,
+  onPreview,
+  onFull,
+}: {
+  preview: NonNullable<DiscoveryView["listening"]>["preview"];
+  durationSeconds: number | null;
+  mode: "preview" | "full";
+  previewEnded: boolean;
+  phase: PlayerPhase | null;
+  disabled: boolean;
+  onPreview: () => void;
+  onFull: () => void;
+}) {
+  const full = durationSeconds ? clock(durationSeconds) : null;
+  if (!preview) {
+    return (
+      <div className="sp-modes sp-modes--single">
+        <p className="sp-modes__note">
+          <FullTrack size={18} /> Full recording{full ? ` · ${full}` : ""}
+          <span>{durationSeconds && durationSeconds < 45 ? "Short enough to hear in full, so there’s no separate preview." : "No verified length for a preview, so it plays in full."}</span>
+        </p>
+      </div>
+    );
+  }
+  const range = rangeLabel(preview);
+  const featured = preview.sourceKind === "REVIEWED_SEGMENT";
+  const live = phase === "playing" || phase === "buffering";
+  return (
+    <div className="sp-modes" role="group" aria-label="How to listen" data-mode={mode}>
+      <button type="button" className="sp-mode" aria-pressed={mode === "preview"} disabled={disabled} onClick={onPreview} data-live={mode === "preview" && live ? "true" : "false"}>
+        <Excerpt size={20} />
+        <span>
+          <strong>{previewEnded ? "Replay preview" : "Hear preview"}</strong>
+          <small>
+            {preview.label} · <span className="sp-mono">{range}</span>
+          </small>
+        </span>
+      </button>
+      <button type="button" className="sp-mode" aria-pressed={mode === "full"} disabled={disabled} onClick={onFull} data-live={mode === "full" && live ? "true" : "false"}>
+        <FullTrack size={20} />
+        <span>
+          <strong>Listen in full</strong>
+          <small>
+            Whole recording{full ? <> · <span className="sp-mono">{full}</span></> : null}
+          </small>
+        </span>
+      </button>
+      <p className="sp-modes__note">
+        {featured ? "Featured preview: a window a person listened to and approved." : "Quick preview: a 30-second excerpt chosen by timing, not by listening. It isn’t a highlight."}
+      </p>
+    </div>
   );
 }

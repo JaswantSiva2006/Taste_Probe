@@ -248,9 +248,21 @@ export type PublicDomainPair = z.infer<typeof PublicDomainPairSchema>;
 export const PublicCapabilitiesSchema = z.object({ pairs: z.array(PublicDomainPairSchema) });
 export type PublicCapabilities = z.infer<typeof PublicCapabilitiesSchema>;
 
-/** Enabled pairs only, with no wire types, evidence internals or verification-only pairs. */
+/**
+ * S9.15 product scope: TasteProbe is a music discovery product. Music is the only
+ * public destination; the user chooses only a starting point. Other enabled pairs
+ * (e.g. movie → book) stay registered for internal regression of the generic engine
+ * but are never published and never startable in production (see AppConfig.publicScope).
+ */
+export const MUSIC_DESTINATION = "music_artist" as const satisfies CulturalDomain;
+
+/** Whether a started session may use this destination under the given public scope. */
+export const destinationInScope = (target: string, scope: "music_only" | "legacy_generic"): boolean =>
+  scope === "legacy_generic" || target === MUSIC_DESTINATION;
+
+/** Enabled music pairs only, with no wire types, evidence internals or verification-only pairs. */
 export const publicCapabilities = (): PublicCapabilities => ({
-  pairs: DOMAIN_PAIRS.filter((p) => p.enabled).map((p) => ({
+  pairs: DOMAIN_PAIRS.filter((p) => p.enabled && p.target === MUSIC_DESTINATION).map((p) => ({
     source: p.source,
     target: p.target,
     sourceLabel: domainLabel(p.source),

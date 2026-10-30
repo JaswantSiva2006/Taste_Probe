@@ -10,15 +10,15 @@
   --sp-deck: #151311;
   --sp-panel: #1b1815;
   --sp-panel-2: #24201c;
-  --sp-ink: #f4ede1;
+  --sp-ink: #f6f5f2;
   --sp-ink-2: #c3b7a5;
   --sp-ink-3: #978c7c;
-  --sp-amber: #efaa45;
-  --sp-amber-hi: #ffc46b;
-  --sp-amber-ink: #1d1307;
-  --sp-love: #ec6f55;
-  --sp-line: rgba(244, 237, 225, 0.11);
-  --sp-line-2: rgba(244, 237, 225, 0.22);
+  --sp-amber: #ff7866;
+  --sp-amber-hi: #ff9384;
+  --sp-amber-ink: #1a0b08;
+  --sp-love: #ff7866;
+  --sp-line: rgba(246, 245, 242, 0.11);
+  --sp-line-2: rgba(246, 245, 242, 0.22);
   --sp-radius: 16px;
   --sp-radius-sm: 10px;
   --sp-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -72,8 +72,8 @@
   width: 100%;
 }
 .sp-btn--danger {
-  border-color: #e0806b;
-  background: #e0806b;
+  border-color: #ff7866;
+  background: #ff7866;
   color: #200a05;
 }
 .sp-btn:focus-visible,
@@ -168,7 +168,7 @@
   border: 1px solid var(--sp-line-2);
   border-radius: 999px;
   padding: 0 0.6rem 0 0.95rem;
-  background: rgba(20, 17, 14, 0.6);
+  background: rgba(16, 20, 28, 0.6);
   color: var(--sp-ink);
   font: 600 0.92rem/1 var(--tp-sans);
   cursor: pointer;
@@ -478,8 +478,8 @@
   border-radius: calc(var(--sp-radius) + 8px);
   padding: clamp(1rem, 3.2vw, 2.5rem);
   background:
-    radial-gradient(70% 55% at 85% 10%, rgba(239, 170, 69, 0.10), transparent 70%),
-    radial-gradient(60% 50% at 0% 100%, rgba(236, 111, 85, 0.06), transparent 70%),
+    radial-gradient(70% 55% at 85% 10%, rgba(255, 120, 102, 0.10), transparent 70%),
+    radial-gradient(60% 50% at 0% 100%, rgba(255, 120, 102, 0.06), transparent 70%),
     var(--sp-deck);
   box-shadow: var(--sp-shadow);
 }
@@ -621,7 +621,7 @@
   border-color: var(--sp-amber);
   background: var(--sp-amber);
   color: var(--sp-amber-ink);
-  box-shadow: 0 10px 24px -10px rgba(239, 170, 69, 0.7);
+  box-shadow: 0 10px 24px -10px rgba(255, 120, 102, 0.7);
 }
 .sp-tbtn--play:hover:not(:disabled) {
   background: var(--sp-amber-hi);
@@ -681,7 +681,7 @@
 }
 .sp-react__btn--love[aria-pressed="true"] {
   border-color: var(--sp-love);
-  background: rgba(236, 111, 85, 0.14);
+  background: rgba(255, 120, 102, 0.14);
   color: #ffb4a3;
 }
 .sp-react__btn--love[aria-pressed="true"] svg {
@@ -876,10 +876,10 @@
   min-height: 56px;
   align-items: center;
   gap: 0.75rem;
-  border: 1px solid rgba(239, 170, 69, 0.4);
+  border: 1px solid rgba(255, 120, 102, 0.4);
   border-radius: var(--sp-radius);
   padding: 0 1.1rem;
-  background: rgba(239, 170, 69, 0.08);
+  background: rgba(255, 120, 102, 0.08);
   color: var(--sp-ink);
   font: 500 0.98rem/1.2 var(--tp-sans);
   text-align: left;
@@ -1081,8 +1081,8 @@
   aspect-ratio: 1;
   border-radius: 50%;
   background:
-    radial-gradient(circle, #e9a43b 0 15%, #0b0a0a 15.5% 17%, transparent 17.5%),
-    repeating-radial-gradient(circle, #1b1916 0 2px, #2b2723 2px 3px);
+    radial-gradient(circle, #ff7866 0 15%, #0b0a0a 15.5% 17%, transparent 17.5%),
+    repeating-radial-gradient(circle, #101318 0 2px, #1a1e26 2px 3px);
   box-shadow: 0 10px 22px -10px rgba(0, 0, 0, 0.8);
   transition: transform var(--sp-med) var(--sp-ease);
 }
@@ -1127,7 +1127,7 @@
   border: 1.5px solid currentColor;
   border-radius: 999px;
   padding: 0.2rem 0.6rem;
-  color: #e08a6f;
+  color: #ff9c8f;
   font: 600 0.7rem/1.2 var(--tp-sans);
   letter-spacing: 0.12em;
   text-transform: uppercase;

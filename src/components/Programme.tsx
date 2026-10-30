@@ -227,7 +227,7 @@ export function Programme(p: Props) {
         <TasteNotes view={view} names={names} title="What you told us" empty="No preferences were confirmed, so nothing was assumed about you." />
         <div className="tp-programme__restart">
           <button type="button" className="tp-btn tp-btn--ghost" onClick={p.onRestart} disabled={p.busy}>
-            Explore another world
+            Start somewhere new
           </button>
           <button type="button" className="tp-btn tp-btn--ghost" onClick={p.onNewAnchor} disabled={p.busy}>
             Try another {sourceNoun}
@@ -282,7 +282,7 @@ function AcceptedProgramme({ view, names, onRestart, onNewAnchor }: Props) {
         <TasteNotes view={view} names={names} title="What you told us" empty="No preferences were confirmed, so nothing was assumed about you." />
         <div className="tp-programme__restart">
           <button type="button" className="tp-btn tp-btn--amber" onClick={onRestart}>
-            <span>Explore another world</span>
+            <span>Start somewhere new</span>
             <ArrowRight size={18} />
           </button>
           <button type="button" className="tp-btn tp-btn--ghost" onClick={onNewAnchor}>

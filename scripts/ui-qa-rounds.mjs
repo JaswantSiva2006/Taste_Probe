@@ -128,7 +128,7 @@ function assertTokenChain(log) {
 for (const width of [375, 1440]) {
   const s = await open(width);
   const { page, shot, log, settled } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   const questions = [await page.textContent("#tp-question")];
   assert.match(await page.textContent(".tp-round-pill"), /Round 1/);
 
@@ -224,7 +224,7 @@ for (const width of [320, 375, 1440]) {
   // continue without rejecting anything; 320 is the overflow check for the new screens
   const s = await open(width);
   const { page, shot, settled } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   await shot("plain-way-in");
   await keepExploring(page);
@@ -240,7 +240,7 @@ for (const width of [320, 375, 1440]) {
   // real exhaustion: keep setting aside and continuing until the server says nothing new is left
   const s = await open(1440);
   const { page, shot, settled } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   let rounds = 1;
   while (rounds < 10 && !(await page.getByRole("button", { name: "Keep exploring" }).isDisabled())) {
@@ -254,7 +254,7 @@ for (const width of [320, 375, 1440]) {
     await finishRound(page);
   }
   assert.ok(await page.getByRole("button", { name: "Keep exploring" }).isDisabled(), "continuation ends truthfully");
-  assert.match(await page.textContent(".tp-continue__body--blocked"), /seen or turned down every verified book/);
+  assert.match(await page.textContent(".tp-continue__body--blocked"), /seen or turned down every verified (book|music artist)/);
   assert.ok(await page.locator(".tp-start").count(), "remaining picks stay on screen");
   assert.ok(await page.locator(".tp-programme .tp-art__board").count(), "missing artwork uses the captioned fallback");
   await shot("exhausted");
@@ -275,7 +275,7 @@ for (const width of [320, 375, 1440]) {
     });
   });
   const { page, shot } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   assert.ok(await page.getByRole("button", { name: "Keep exploring" }).isDisabled());
   assert.match(await page.textContent(".tp-continue__body--blocked"), /used its question allowance/);
@@ -291,7 +291,7 @@ for (const width of [320, 375, 1440]) {
     );
   });
   const { page, log } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   await page.getByRole("button", { name: "Keep exploring" }).click();
   await page.waitForSelector(".tp-error");
@@ -311,7 +311,7 @@ for (const width of [320, 375, 1440]) {
     );
   });
   const { page, shot, log } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   await page.getByRole("button", { name: "Keep exploring" }).click();
   await page.waitForSelector(".tp-error");
@@ -330,7 +330,7 @@ for (const width of [320, 375, 1440]) {
     await page.route("**/api/discovery/reject", (r) => (failOnce ? ((failOnce = false), r.abort("failed")) : r.continue()));
   });
   const { page, log, settled } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   const title = await leadTitle(page);
   await page.getByRole("button", { name: `Not for me: ${title}` }).click();
@@ -355,7 +355,7 @@ for (const width of [320, 375, 1440]) {
     );
   });
   const { page } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   await page.getByRole("button", { name: `I’ll try this: ${await leadTitle(page)}` }).click();
   await page.waitForSelector(".tp-error");
@@ -373,7 +373,7 @@ for (const width of [320, 375, 1440]) {
     });
   });
   const { page, log, settled } = s;
-  await startJourney(page, "Books", "a movie", "Interstellar", "Interstellar");
+  await startJourney(page, "Music", "Movies", "Interstellar", "Interstellar");
   await finishRound(page);
   await page.getByRole("button", { name: `Not for me: ${await leadTitle(page)}` }).dblclick();
   await page.waitForTimeout(900);
@@ -386,7 +386,6 @@ for (const width of [320, 375, 1440]) {
 // ---------------------------------------------------------------- cross-domain rounds
 
 for (const [label, world, source, query, exact, frame] of [
-  ["music_artist→book", "Books", "a music artist", "Glass Harbor", "Glass Harbor (synthetic)", "portrait"],
   ["movie→music_artist", "Music artists", "a movie", "Interstellar", "Interstellar", "square"],
 ]) {
   for (const width of [375, 1440]) {

@@ -126,5 +126,7 @@ export function listeningViewOf(state: ListeningState, artistName: (id: string) 
     history: state.encounters.slice(-30).map((e) => ({ artistId: e.artistId, artistName: e.artistName, videoId: e.videoId, title: e.title, feedback: reactions.get(e.videoId) ?? null })),
     saved: state.saved,
     geminiSongRequests: state.geminiSongRequests,
+    // Only a preview of the presented recording is ever projected.
+    preview: current && state.preview && state.preview.videoId === current.videoId && state.preview.artistId === current.artistId ? state.preview : null,
   };
 }

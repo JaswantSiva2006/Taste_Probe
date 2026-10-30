@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DOMAINS,
   DOMAIN_PAIRS,
+  MUSIC_DESTINATION,
+  destinationInScope,
   EntityTypeSchema,
   PublicCapabilitiesSchema,
   QLOO_WIRE_TYPES,
@@ -90,9 +92,20 @@ describe("domain capability registry", () => {
   it("public projection lists only enabled pairs, without wire types, evidence or verification pairs", () => {
     const pub = PublicCapabilitiesSchema.parse(publicCapabilities());
     expect(pub.pairs.every((p) => isEnabledPair(p.source, p.target))).toBe(true);
-    expect(pub.pairs).toContainEqual({ source: "movie", target: "book", sourceLabel: "movie", targetLabel: "books" });
+    // S9.15: music only. The movie -> book pair stays registered and enabled for internal regression, never published.
+    expect(pub.pairs.every((p) => p.target === MUSIC_DESTINATION)).toBe(true);
+    expect(pub.pairs.map((p) => p.source)).toEqual(["movie", "music_artist", "tv_show", "video_game", "podcast"]);
+    expect(pub.pairs.some((p) => p.source === "book" || p.target === "book")).toBe(false);
+    expect(isEnabledPair("movie", "book")).toBe(true);
     expect(JSON.stringify(pub)).not.toMatch(/urn:|evidence|enabled|OFFLINE|VERIFIED/);
-    expect(enabledSourceDomains()).toEqual([...new Set(pub.pairs.map((p) => p.source))]);
+    expect(new Set(enabledSourceDomains())).toEqual(new Set(pub.pairs.map((p) => p.source)));
+  });
+
+  it("music-only scope refuses every non-music destination; legacy scope keeps internal regression paths", () => {
+    expect(destinationInScope("music_artist", "music_only")).toBe(true);
+    expect(destinationInScope("book", "music_only")).toBe(false);
+    expect(destinationInScope("tv_show", "music_only")).toBe(false);
+    expect(destinationInScope("book", "legacy_generic")).toBe(true);
   });
 });
 
@@ -177,6 +190,9 @@ describe("server-side pair validation", () => {
   it("accepts the legacy movie -> book start body unchanged", () => {
     expect(StartRequestSchema.parse(interstellarStart)).toEqual(interstellarStart);
     expect(assertEnabledPair(interstellarStart)).toBe("enabled");
+    // S9.15: a public (music-only) deployment refuses the same pair before any provider call.
+    expect(() => assertEnabledPair(interstellarStart, [], "music_only")).toThrow(/discovers music/);
+    expect(assertEnabledPair({ sourceType: "podcast", targetType: "music_artist" }, [], "music_only")).toBe("enabled");
   });
 
   it("schema rejects unknown domain values and client capability overrides", () => {
@@ -223,6 +239,14 @@ describe("isolated verification configuration", () => {
       loadConfig({ NODE_ENV: "production", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: newTestSecret(), UPSTASH_REDIS_REST_URL: "https://r.example", UPSTASH_REDIS_REST_TOKEN: "t", VERIFICATION_PAIRS: "podcast->book" }),
     ).toThrow(/not allowed in production/);
     expect(testConfig().verification.pairs).toEqual([]);
+  });
+
+  it("S9.15: production and live development are music-only; legacy generic journeys are refused in production", () => {
+    const prod = { NODE_ENV: "production", QLOO_MODE: "mock", SESSION_SIGNING_SECRET: newTestSecret(), UPSTASH_REDIS_REST_URL: "https://r.example", UPSTASH_REDIS_REST_TOKEN: "t" } as const;
+    expect(loadConfig(prod).publicScope).toBe("music_only");
+    expect(() => loadConfig({ ...prod, LEGACY_GENERIC_JOURNEYS: "true" })).toThrow(/not allowed in production/);
+    expect(loadConfig({ NODE_ENV: "development", QLOO_MODE: "live", QLOO_API_KEY: "k", QLOO_BASE_URL: "https://hackathon.api.qloo.com", SESSION_SIGNING_SECRET: newTestSecret() }).publicScope).toBe("music_only");
+    expect(testConfig().publicScope).toBe("legacy_generic");
   });
 
   it("a verification pair can start but stays out of the public projection", async () => {

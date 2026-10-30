@@ -313,12 +313,10 @@ describe("S9.4 enabled journeys over HTTP (mock fixtures)", () => {
 });
 
 describe("S9.2 domain registry and Discovery Path over HTTP", () => {
-  it("health exposes only enabled pairs", async () => {
+  it("health exposes only the enabled music journeys (S9.15: music is the only public destination)", async () => {
     const json = await (await healthRoute()).json();
     expect(json.data.capabilities.pairs).toEqual([
-      { source: "movie", target: "book", sourceLabel: "movie", targetLabel: "books" },
       { source: "movie", target: "music_artist", sourceLabel: "movie", targetLabel: "music artists" },
-      { source: "music_artist", target: "book", sourceLabel: "music artist", targetLabel: "books" },
       { source: "music_artist", target: "music_artist", sourceLabel: "music artist", targetLabel: "music artists" },
       { source: "tv_show", target: "music_artist", sourceLabel: "TV show", targetLabel: "music artists" },
       { source: "video_game", target: "music_artist", sourceLabel: "video game", targetLabel: "music artists" },

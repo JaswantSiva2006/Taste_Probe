@@ -84,6 +84,8 @@ const EnvSchema = z.object({
   // Exposes PENDING_REVIEW featured-moment candidates, labelled as unreviewed, for human review. Refused in production.
   MUSIC_MOMENT_REVIEW: bool(false),
   ADAPTIVE_POOL_ENABLED: bool(false),
+  // S9.15: legacy non-music journeys (internal regression only). Refused in production.
+  LEGACY_GENERIC_JOURNEYS: bool(false),
 });
 
 export type AppConfig = {
@@ -123,6 +125,12 @@ export type AppConfig = {
   };
   /** Registered-but-disabled pairs admitted for internal verification (never in production). */
   verification: { pairs: string[] };
+  /**
+   * S9.15 public product scope. "music_only": music is the only destination a session may
+   * start with. "legacy_generic": the older generic journeys stay reachable for internal
+   * regression (tests, mock fixtures, explicit non-production opt-in); never in production.
+   */
+  publicScope: "music_only" | "legacy_generic";
   /** S9.9: YouTube resolution. `youtubeApiKey` stays server-side; absent = dynamic lookup disabled. */
   music: {
     youtubeApiKey?: string;
@@ -140,6 +148,15 @@ function momentReview(e: z.infer<typeof EnvSchema>): boolean {
     throw new AppError("CONFIG_ERROR", 500, "MUSIC_MOMENT_REVIEW is not allowed in production");
   }
   return e.MUSIC_MOMENT_REVIEW;
+}
+
+/** S9.15: production is always music-only; legacy generic journeys are an internal regression aid. */
+function publicScope(e: z.infer<typeof EnvSchema>): AppConfig["publicScope"] {
+  if (e.NODE_ENV === "production") {
+    if (e.LEGACY_GENERIC_JOURNEYS) throw new AppError("CONFIG_ERROR", 500, "LEGACY_GENERIC_JOURNEYS is not allowed in production");
+    return "music_only";
+  }
+  return e.LEGACY_GENERIC_JOURNEYS || e.NODE_ENV === "test" || e.QLOO_MODE === "mock" ? "legacy_generic" : "music_only";
 }
 
 /** Parses VERIFICATION_PAIRS; only registered, currently disabled pairs are accepted. */
@@ -294,6 +311,7 @@ export function loadConfig(env: EnvSource = process.env): AppConfig {
       adaptivePool: e.ADAPTIVE_POOL_ENABLED,
     },
     verification: { pairs: verificationPairs(e) },
+    publicScope: publicScope(e),
     music: {
       youtubeApiKey: e.YOUTUBE_API_KEY,
       timeoutMs: e.YOUTUBE_TIMEOUT_MS,

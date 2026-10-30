@@ -8,15 +8,16 @@
  *   npm run dev:mock            (in another terminal)
  *   node scripts/ui-qa.mjs --url http://127.0.0.1:3000 [--widths 375,1440] [--reduced-motion]
  *
- * Journeys: movie→book (every width, full keyboard + error-recovery path),
- * music_artist→book, movie→music_artist, early finish, capability failure,
- * 429 without auto-retry, session conflict, and a server-side unsupported-pair check.
+ * S9.15 music-only product: movie→music (every width, full keyboard + error-recovery
+ * path), artist→music (ambiguous search), TV/game/podcast starting points,
+ * capability failure, 429 without auto-retry, session conflict, and server-side
+ * checks that unsupported pairs are refused and books are never published.
  */
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
-import { axeScan, begin, chooseSource, chooseWorld, hygiene, searchAndSelect } from "./lib/ui-flow.mjs";
+import { axeScan, begin, chooseSource, expectNoDestinationPicker, hygiene, searchAndSelect } from "./lib/ui-flow.mjs";
 
 const arg = (flag, fallback) => {
   const i = process.argv.indexOf(flag);
@@ -45,7 +46,7 @@ async function open(width, opts = {}) {
   const errors = [];
   const state = { induced: false };
   page.on("pageerror", (e) => errors.push(String(e.message)));
-  page.on("console", (m) => m.type() === "error" && !(state.induced && /ERR_FAILED|status of (400|409|429|500)/.test(m.text())) && errors.push(m.text()));
+  page.on("console", (m) => m.type() === "error" && !(state.induced && /ERR_FAILED|status of (400|409|422|429|500)/.test(m.text())) && errors.push(m.text()));
   const requests = { search: [], start: [], answer: [], finish: 0, health: 0 };
   page.on("request", (r) => {
     const u = r.url();
@@ -81,14 +82,21 @@ async function open(width, opts = {}) {
   return { page, shot, close, requests, responses, state, errors };
 }
 
-/** Rendered destinations must be exactly the server's enabled targets. */
-async function expectWorldsFromHealth(page) {
+const SHORT = { movie: "Movies", music_artist: "Artists", tv_show: "TV shows", video_game: "Games", podcast: "Podcasts" };
+
+/** S9.15: the starting points are exactly the server's music sources; no destination, no books. */
+async function expectSourcesFromHealth(page) {
   const health = await page.evaluate(() => fetch("/api/health").then((r) => r.json()));
-  const expected = [...new Set(health.data.capabilities.pairs.map((p) => p.targetLabel.toLowerCase()))];
-  const rendered = (await page.locator(".tp-world__name").allTextContents()).map((t) => t.toLowerCase());
-  assert.deepEqual(rendered, expected, "destination placards must mirror /api/health capabilities");
-  for (const absent of ["podcasts", "video games", "tv shows", "movies"]) assert.ok(!rendered.includes(absent), `${absent} must not be offered`);
-  return health.data.capabilities.pairs;
+  const pairs = health.data.capabilities.pairs;
+  assert.ok(pairs.every((p) => p.target === "music_artist"), "only music journeys are published");
+  const expected = [...new Set(pairs.map((p) => SHORT[p.source] ?? p.sourceLabel))];
+  const rendered = (await page.locator(".ah-input__name").allTextContents()).map((t) => t.trim());
+  assert.deepEqual(rendered, expected, "starting points must mirror /api/health capabilities");
+  assert.deepEqual(rendered, ["Movies", "Artists", "TV shows", "Games", "Podcasts"]);
+  assert.equal(await page.locator(".ah-input.is-on").count(), 0, "no starting point is preselected");
+  assert.ok(!/\bbooks?\b/i.test(await page.textContent("main")), "no book copy on the landing page");
+  await expectNoDestinationPicker(page);
+  return pairs;
 }
 
 /** Finale assertions shared by every journey. */
@@ -115,6 +123,7 @@ async function expectFinale(page, responses, { target, minFeatured = 1 }) {
   await why.locator("summary").click();
   assert.equal((await why.locator(".tp-whybox__text").textContent()).trim(), path.featured[0].explanation.text);
   const art = target === "book" ? ".tp-art--portrait" : ".tp-art--square";
+  if (target === "music_artist") await page.waitForSelector(".sp-stage");
   assert.ok(await page.locator(`.tp-start ${art}`).count(), `START HERE artwork uses the ${target} frame`);
   assert.equal(await page.locator(".tp-programme a[href^='http']:not(.tp-listen a)").count(), 0, "no external links are invented");
   // S9.9: the listening room may link out, but only to YouTube.
@@ -123,7 +132,7 @@ async function expectFinale(page, responses, { target, minFeatured = 1 }) {
   assert.equal(await page.locator(".tp-listen").count(), target === "music_artist" ? 1 : 0, "one listening room, music journeys only");
 }
 
-// ---------------------------------------------------------------- 1. movie → book, every width
+// ---------------------------------------------------------------- 1. movie → music, every width
 
 for (const width of widths) {
   const s = await open(width);
@@ -131,13 +140,11 @@ for (const width of widths) {
   await shot("01-landing-fold", false);
   await shot("01-landing-full");
   await audit(page, width, "landing");
-  await expectWorldsFromHealth(page);
-  assert.equal(await page.locator(".tp-step--anchor").count(), 0, "anchor step waits for a destination");
+  await expectSourcesFromHealth(page);
+  assert.ok(await page.locator("#tp-anchor").isDisabled(), "search waits for a starting point");
 
-  await chooseWorld(page, "Books", true);
-  const sources = (await page.locator(".tp-chip").allTextContents()).map((t) => t.trim());
-  assert.deepEqual(sources, ["a movie", "a music artist"], "Books accepts exactly the server's sources");
-  await chooseSource(page, "a movie");
+  await chooseSource(page, "Movies", true);
+  assert.match(await page.textContent(".ah-search__label"), /Which film stays with you\?/);
   await shot("02-anchor-step");
   await searchAndSelect(page, "Interstellar", "Interstellar", { viaKeyboard: true });
   assert.equal(requests.search.at(-1), "movie", "search uses the selected source type");
@@ -146,8 +153,8 @@ for (const width of widths) {
   await begin(page);
   assert.deepEqual(
     { s: requests.start.at(-1).sourceType, t: requests.start.at(-1).targetType, id: requests.start.at(-1).selectedEntityId },
-    { s: "movie", t: "book", id: "mock:movie:interstellar" },
-    "start sends the verified selection and chosen pair",
+    { s: "movie", t: "music_artist", id: "mock:movie:interstellar" },
+    "start sends the verified selection; music is always the destination",
   );
   const q1 = await page.textContent("#tp-question");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "tp-question", "focus moves to the question");
@@ -187,7 +194,8 @@ for (const width of widths) {
   state.induced = false;
 
   await page.getByRole("button", { name: "Show my way in" }).click();
-  await expectFinale(page, responses, { target: "book", minFeatured: 2 });
+  await expectFinale(page, responses, { target: "music_artist", minFeatured: 2 });
+  assert.ok(!/\bbooks?\b/i.test(await page.textContent("main")), "music finale contains no book copy");
   await shot("07-way-in");
   await audit(page, width, "way-in (explanation open)");
   await shot("07-way-in-fold", false);
@@ -199,50 +207,44 @@ for (const width of widths) {
   assert.match(await page.textContent(".tp-programme__sub"), /records only your intention/);
   assert.equal(await page.getByRole("button", { name: "Keep exploring" }).count(), 0, "no continuation after accepting");
 
-  await page.getByRole("button", { name: "Explore another world" }).click();
-  await page.waitForSelector(".tp-world");
-  assert.equal(await page.locator(".tp-world.is-on").count(), 0, "restart returns to an unchosen destination");
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("name")), "tp-target", "focus returns to the destination picker");
-  passed.push(`${width}: movie→book full journey`);
+  await page.getByRole("button", { name: "Start somewhere new" }).click();
+  await page.waitForSelector(".ah-input");
+  assert.equal(await page.locator(".ah-input.is-on").count(), 0, "restart returns to an unchosen starting point");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "tp-hero-title", "focus returns to the page title");
+  passed.push(`${width}: movie→music full journey`);
   await s.close();
 }
 
 // ---------------------------------------------------------------- 2/3/4. other enabled journeys + early finish
 
 for (const width of [375, 1440]) {
-  // music_artist → book (ambiguous search)
+  // artist → music (ambiguous search)
   {
     const s = await open(width);
     const { page, shot, requests, responses } = s;
-    await chooseWorld(page, "Books");
-    await chooseSource(page, "a music artist");
+    await chooseSource(page, "Artists");
     await page.fill("#tp-anchor", "Glass Harbor");
     await searchAndSelect(page, "Glass Harbor", "Glass Harbor (synthetic)");
-    assert.ok((await page.locator(".tp-ticket").count()) >= 2, "ambiguous artist names are listed for explicit choice");
+    assert.ok((await page.locator(".ah-result").count()) >= 2, "ambiguous artist names are listed for explicit choice");
     assert.equal(requests.search.at(-1), "music_artist");
     await shot("10-artist-selected");
-    await begin(page);
-    assert.deepEqual([requests.start.at(-1).sourceType, requests.start.at(-1).targetType], ["music_artist", "book"]);
-    assert.match(await page.textContent(".tp-strip__label"), /From music artist to books/);
-    await shot("11-artist-question");
-    await page.getByRole("button", { name: "Not for me" }).click();
-    await page.waitForSelector(".tp-notice");
-    await page.getByRole("button", { name: "Show my way in" }).click();
-    await expectFinale(page, responses, { target: "book" });
-    await page.getByRole("button", { name: "Try another music artist" }).click();
-    await page.waitForSelector("#tp-anchor");
-    assert.equal(await page.getByRole("radio", { name: "a music artist", exact: true }).isChecked(), true, "same world kept for a new anchor");
-    passed.push(`${width}: music_artist→book`);
+    // The synthetic fixtures hold no artist→artist results: the server answers honestly and the UI says so.
+    s.state.induced = true;
+    await page.getByRole("button", { name: /^Discover music from/ }).click();
+    await page.waitForSelector(".tp-error, #tp-question, #tp-programme-title");
+    assert.deepEqual([requests.start.at(-1).sourceType, requests.start.at(-1).targetType], ["music_artist", "music_artist"]);
+    assert.match(await page.textContent(".tp-error"), /No music artists for this music artist/);
+    assert.equal(await page.getByRole("radio", { name: /^Artists\b/ }).isChecked(), true, "the starting point is kept so another search is one step");
+    await shot("11-artist-empty", false);
+    void responses;
+    passed.push(`${width}: artist→music (ambiguous search, honest empty result)`);
     await s.close();
   }
   // movie → music_artist (square artwork, artist wording)
   {
     const s = await open(width);
     const { page, shot, requests, responses } = s;
-    await chooseWorld(page, "Music artists");
-    const sources = (await page.locator(".tp-chip").allTextContents()).map((t) => t.trim());
-    assert.deepEqual(sources, ["a movie", "a music artist", "a TV show", "a video game", "a podcast"], "Music artists offers the five server-verified source domains");
-    await chooseSource(page, "a movie");
+    await chooseSource(page, "Movies");
     await searchAndSelect(page, "Interstellar", "Interstellar");
     await begin(page);
     assert.deepEqual([requests.start.at(-1).sourceType, requests.start.at(-1).targetType], ["movie", "music_artist"]);
@@ -260,24 +262,19 @@ for (const width of [375, 1440]) {
     passed.push(`${width}: movie→music_artist`);
     await s.close();
   }
-  // early finish: the backend has too little evidence to ask anything
-  {
+  // every other starting point reaches music through the same real flow
+  for (const [label, domain] of [["TV shows", "tv_show"], ["Games", "video_game"], ["Podcasts", "podcast"]]) {
+    if (width !== 1440) break;
     const s = await open(width);
-    const { page, shot, responses } = s;
-    await chooseWorld(page, "Books");
-    await chooseSource(page, "a music artist");
-    await searchAndSelect(page, "Lone Signal", "Lone Signal (synthetic)");
-    await begin(page);
-    assert.equal(await page.locator("#tp-question").count(), 0, "no question is pretended");
-    await expectFinale(page, responses, { target: "book" });
-    assert.equal(responses["discovery/start"].data.finishReason, "insufficient_question_evidence");
-    assert.match(await page.textContent(".tp-programme__sub"), /none was asked/);
-    assert.equal(await page.locator(".tp-path, .tp-programme__list").count(), 0, "no padded supporting cards");
-    // S9.7: one verified pick and no question left → continuing is truthfully unavailable.
-    assert.ok(await page.getByRole("button", { name: "Keep exploring" }).isDisabled(), "nothing new to explore after an early finish with one pick");
-    assert.match(await page.textContent(".tp-continue__body--blocked"), /seen or turned down every verified book/);
-    await shot("14-early-finish");
-    passed.push(`${width}: early finish`);
+    const { page, shot, requests } = s;
+    await chooseSource(page, label);
+    await page.fill("#tp-anchor", "a");
+    await page.press("#tp-anchor", "Enter");
+    await page.waitForSelector(".ah-result, .ah-results__empty, .tp-error");
+    assert.equal(requests.search.at(-1), domain, `${label} searches the ${domain} catalogue`);
+    assert.equal(await page.locator(".tp-error").count(), 0, `${label} search is accepted by the server`);
+    await shot(`14-source-${domain}`, false);
+    passed.push(`${width}: ${label} starting point searches ${domain}`);
     await s.close();
   }
 }
@@ -307,8 +304,7 @@ for (const width of [375, 1440]) {
   });
   const { page, shot, state } = s;
   state.induced = true; // the deliberately broken image logs a load error
-  await chooseWorld(page, "Books");
-  await chooseSource(page, "a movie");
+  await chooseSource(page, "Movies");
   await searchAndSelect(page, "Interstellar", "Interstellar");
   await begin(page);
   const first = page.locator(".tp-shelf__item").nth(0).locator(".tp-art");
@@ -318,7 +314,7 @@ for (const width of [375, 1440]) {
   assert.ok(await first.locator(".tp-art__title").isVisible(), "a loading cover shows the typeset title, not an empty frame");
   assert.equal(await first.locator(".tp-art__note").count(), 0, "no false 'no cover' caption while loading");
   assert.equal(await second.getAttribute("data-art-state"), "none", "a broken cover falls back");
-  assert.match(await second.locator(".tp-art__note").textContent(), /No cover from Qloo/);
+  assert.match(await second.locator(".tp-art__note").textContent(), /No (cover|image) from Qloo/);
   await shot("15-cover-loading", false);
   releaseSlow();
   await page.waitForFunction(() => document.querySelector(".tp-shelf__item .tp-art")?.getAttribute("data-art-state") === "loaded");
@@ -337,12 +333,12 @@ for (const width of [375, 1440]) {
     },
   });
   const { page, shot } = s;
-  await page.waitForSelector(".tp-step__status--error");
-  assert.equal(await page.locator(".tp-world").count(), 0, "no destinations invented when capabilities fail");
+  await page.waitForSelector(".ah-status--error");
+  assert.equal(await page.locator(".ah-input").count(), 0, "no starting points invented when capabilities fail");
   await shot("20-capabilities-error", false);
   fail = false;
   await page.getByRole("button", { name: "Try again" }).click();
-  await page.waitForSelector(".tp-world");
+  await page.waitForSelector(".ah-input");
   passed.push("375: capability failure + retry");
   await s.close();
 }
@@ -354,8 +350,7 @@ for (const width of [375, 1440]) {
   await page.route("**/api/entities/search**", (r) =>
     r.fulfill({ status: 429, contentType: "application/json", headers: { "retry-after": "60" }, body: JSON.stringify({ ok: false, error: { code: "RATE_LIMITED", message: "slow down" }, meta: { requestId: "rate0001", mode: "mock" } }) }),
   );
-  await chooseWorld(page, "Books");
-  await chooseSource(page, "a movie");
+  await chooseSource(page, "Movies");
   await page.fill("#tp-anchor", "Interstellar");
   await page.press("#tp-anchor", "Enter");
   await page.waitForSelector(".tp-error");
@@ -370,8 +365,7 @@ for (const width of [375, 1440]) {
   // stale revision on answer -> restart recovery
   const s = await open(1440);
   const { page, shot, state } = s;
-  await chooseWorld(page, "Books");
-  await chooseSource(page, "a movie");
+  await chooseSource(page, "Movies");
   await searchAndSelect(page, "Interstellar", "Interstellar");
   await begin(page);
   state.induced = true;
@@ -400,7 +394,9 @@ for (const width of [375, 1440]) {
     fetch("/api/discovery/start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ entityQuery: "Interstellar", sourceType: "movie", targetType: "podcast", maxQuestions: 3, selectedEntityId: "mock:movie:interstellar" }) }).then(async (r) => ({ status: r.status, code: (await r.json()).error?.code })),
   );
   assert.deepEqual(res2, { status: 400, code: "UNSUPPORTED_DOMAIN" });
-  passed.push("server: unsupported pairs refused");
+  const health = await s.page.evaluate(() => fetch("/api/health").then((r) => r.json()));
+  assert.ok(!JSON.stringify(health.data.capabilities).includes("book"), "books are never published");
+  passed.push("server: unsupported pairs refused; books unpublished");
   await s.close();
 }
 

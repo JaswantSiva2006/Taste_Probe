@@ -10,22 +10,20 @@ const pair = (source: string, target: string, sourceLabel: string, targetLabel: 
   ({ source, target, sourceLabel, targetLabel }) as PublicDomainPair;
 
 describe("capability-driven pickers", () => {
-  it("targets are the distinct enabled destinations in registry order", () => {
-    expect(targetChoices(LIVE).map((t) => [t.domain, t.label])).toEqual([
-      ["book", "Books"],
-      ["music_artist", "Music artists"],
-    ]);
+  it("S9.15: music is the only published destination; there is nothing to choose", () => {
+    expect(targetChoices(LIVE).map((t) => [t.domain, t.label])).toEqual([["music_artist", "Music artists"]]);
   });
 
-  it("sources are filtered by the chosen destination", () => {
-    expect(sourceChoices(LIVE, "book").map((s) => s.domain)).toEqual(["movie", "music_artist"]);
+  it("the five starting points are the server's music sources, in registry order, with no book", () => {
+    expect(sourceChoices(LIVE, "book")).toEqual([]);
     expect(sourceChoices(LIVE, "music_artist").map((s) => s.domain)).toEqual(["movie", "music_artist", "tv_show", "video_game", "podcast"]);
     expect(sourceChoices(LIVE, null)).toEqual([]);
     expect(sourceChoices(LIVE, "podcast")).toEqual([]);
   });
 
   it("unsupported pairs are never offered", () => {
-    expect(isOfferedPair(LIVE, "movie", "book")).toBe(true);
+    expect(isOfferedPair(LIVE, "movie", "book")).toBe(false);
+    expect(isOfferedPair(LIVE, "tv_show", "music_artist")).toBe(true);
     expect(isOfferedPair(LIVE, "music_artist", "music_artist")).toBe(true);
     expect(isOfferedPair(LIVE, "book", "movie")).toBe(false);
     expect(isOfferedPair(LIVE, "podcast", "book")).toBe(false);
@@ -39,8 +37,9 @@ describe("capability-driven pickers", () => {
 
   it("a newly enabled pair appears without code changes, with a neutral look", () => {
     const extended = [...LIVE, pair("movie", "podcast", "movie", "podcasts"), pair("movie", "zine", "movie", "zines")];
-    expect(targetChoices(extended).map((t) => t.label)).toEqual(["Books", "Music artists", "Podcasts", "Zines"]);
+    expect(targetChoices(extended).map((t) => t.label)).toEqual(["Music artists", "Podcasts", "Zines"]);
     expect(lookOf("podcast")).toEqual({ glyph: "mic", shape: "square" });
+    expect(lookOf("music_artist")).toEqual({ glyph: "note", shape: "square" });
     expect(lookOf("zine")).toEqual({ glyph: "spark", shape: "square" });
   });
 

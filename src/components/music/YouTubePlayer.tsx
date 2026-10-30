@@ -1,15 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
-import type { FeaturedMoment, ResolvedVideo } from "@/lib/contracts";
+import type { ResolvedVideo } from "@/lib/contracts";
+import { GUARD_INTERVAL_MS, isPlayableWindow, previewTick, rewindTarget, type PreviewWindow } from "@/lib/ui/preview-guard";
 
 /**
- * S9.9 official YouTube IFrame player (adapted from the S9.8 prototype).
- * - One visible player per mount; the parent remounts it (key) per artist, and the
- *   iframe is destroyed on unmount, so a previous artist can never keep playing.
+ * Official YouTube IFrame player (S9.9, external transport S9.13, previews S9.15).
+ * - One visible player per mount; the parent remounts it (key) per recording, and the
+ *   iframe is destroyed on unmount, so a previous recording (and any preview timer
+ *   attached to it) can never keep running.
  * - Nothing plays until the user presses a control; videos are only cued on load.
  * - Native YouTube controls, branding and ads stay intact; every app control sits
  *   outside the embed.
+ * - Preview: the server-validated window is cued/loaded with startSeconds/endSeconds.
+ *   Because endSeconds stops applying after any seek, a guard samples the player's
+ *   own clock while it plays (see preview-guard.ts). A native scrub outside the window
+ *   switches to full listening instead of fighting the listener.
  * - Player errors stop the player, then try the next reviewed video for the same
  *   artist, then fall back to an honest YouTube link. The artist is never replaced.
  */
@@ -66,7 +72,9 @@ export function loadYouTubeApi(): Promise<YTNamespace> {
 }
 
 export type PlayerPhase = "loading" | "ready" | "buffering" | "playing" | "paused" | "ended" | "failed";
-type Mode = "full" | "moment";
+export type ListenMode = "preview" | "full";
+/** What the transport needs to render honestly. `previewEnded`: the window was heard to its end. */
+export type PlaybackState = { phase: PlayerPhase; mode: ListenMode; previewEnded: boolean };
 
 /** YouTube's documented onError codes. */
 export function errorCopy(code: number): string {
@@ -79,49 +87,67 @@ export function errorCopy(code: number): string {
 
 const STATE_PHASE: Record<number, PlayerPhase> = { [-1]: "ready", 0: "ended", 1: "playing", 2: "paused", 3: "buffering", 5: "ready" };
 
-export const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-
 type Props = {
   artistName: string;
   /** Primary first, then reviewed alternates for the same artist. */
   videos: ResolvedVideo[];
-  moment: FeaturedMoment | null;
+  /** S9.15 server-validated window of videos[0]; null = full playback only. */
+  preview: PreviewWindow | null;
   fallbackUrl: string;
   fallbackLabel: string;
-  /** S9.13: the stage renders its own transport outside the embed; the frame and fallback stay. */
-  bare?: boolean;
-  /** S9.13: real player phase changes (from the IFrame API), e.g. to drive the vinyl. */
-  onPhase?: (phase: PlayerPhase) => void;
-  /** S9.13: supported IFrame API controls for an external transport. */
+  onPlayback?: (s: PlaybackState) => void;
   controlsRef?: Ref<PlayerHandle>;
 };
 
 /** External transport. Every method is a supported YouTube IFrame Player API call. */
-export type PlayerHandle = { toggle(): void; replay(): void; rewind(seconds: number): void };
+export type PlayerHandle = {
+  toggle(): void;
+  /** Replays the current mode: the preview window, or the recording from the start. */
+  replay(): void;
+  rewind(seconds: number): void;
+  playPreview(): void;
+  playFull(): void;
+};
 
-export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbackLabel, bare = false, onPhase, controlsRef }: Props) {
+export function YouTubePlayer({ artistName, videos, preview, fallbackUrl, fallbackLabel, onPlayback, controlsRef }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
   const indexRef = useRef(0);
-  const modeRef = useRef<Mode>("full");
   // Terminal failure: later state events (e.g. from stopVideo) must not revive the player.
   const failedRef = useRef(false);
+  /** Increments on every load; a guard tick from an older load is ignored. */
+  const loadGen = useRef(0);
+  const loadedAt = useRef(0);
   const [index, setIndex] = useState(0);
   const [phase, setPhase] = useState<PlayerPhase>("loading");
-  const [mode, setMode] = useState<Mode>("full");
   const [notice, setNotice] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState<string | null>(null);
-  const [duration, setDuration] = useState<number | null>(null);
   const [reported, setReported] = useState<{ id?: string; title?: string; author?: string }>({});
+  const [previewEnded, setPreviewEnded] = useState(false);
 
   const video = videos[Math.min(index, videos.length - 1)]!;
-  // A moment applies only to the video it was reviewed on, inside its real duration.
-  const momentOk = Boolean(moment && moment.videoId === video.videoId && (duration === null || moment.endSeconds <= duration));
+  // A preview applies only to the recording it was validated for (the primary), inside its duration.
+  const windowOk = index === 0 && isPlayableWindow(preview, video.durationSeconds);
+  const win = windowOk ? preview : null;
+  const [mode, setMode] = useState<ListenMode>(win ? "preview" : "full");
+  const modeRef = useRef<ListenMode>(mode);
+  const winStart = win?.startSeconds;
+  const winEnd = win?.endSeconds;
+  const winRef = useRef(win);
+  useEffect(() => {
+    winRef.current = winStart === undefined || winEnd === undefined ? null : { startSeconds: winStart, endSeconds: winEnd };
+  }, [winStart, winEnd]);
+
+  const switchMode = (m: ListenMode) => {
+    modeRef.current = m;
+    setMode(m);
+  };
 
   const handleError = useCallback(
     (code: number) => {
       const player = playerRef.current;
+      loadGen.current += 1;
       try {
         player?.stopVideo();
       } catch {}
@@ -129,7 +155,8 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
       if (player && next < videos.length) {
         indexRef.current = next;
         setIndex(next);
-        setDuration(null);
+        modeRef.current = "full";
+        setMode("full");
         player.cueVideoById({ videoId: videos[next]!.videoId });
         setNotice(`That video can’t play here (${errorCopy(code)}). Switched to another reviewed video by ${artistName}: press Play.`);
         setPhase("ready");
@@ -160,19 +187,27 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
           events: {
             onReady: () => {
               if (cancelled || failedRef.current) return;
+              // Cue (never play) the preview window, so even YouTube's own play button starts it bounded.
+              const w = winRef.current;
+              // Controls enable on YouTube's CUED event for that cue, so a quick first press can't race it.
+              if (w && modeRef.current === "preview") {
+                loadedAt.current = performance.now();
+                playerRef.current?.cueVideoById({ videoId: videos[0]!.videoId, startSeconds: w.startSeconds, endSeconds: w.endSeconds });
+                return;
+              }
               setPhase("ready");
-              const d = playerRef.current?.getDuration();
-              if (d && d > 0) setDuration(d);
             },
             onStateChange: (e: { data: number }) => {
               if (cancelled || failedRef.current) return;
               const p = playerRef.current;
-              setPhase(STATE_PHASE[e.data] ?? "ready");
+              const next = STATE_PHASE[e.data] ?? "ready";
+              // YouTube enforces endSeconds by ending playback: in preview mode that is the preview's end, not the recording's.
+              if (e.data === 0 && modeRef.current === "preview") setPreviewEnded(true);
+              if (e.data === 1) setPreviewEnded(false);
+              setPhase(next);
               if (e.data === 1 && p) {
                 const data = p.getVideoData?.() ?? {};
                 setReported({ id: data.video_id, title: data.title, author: data.author });
-                const d = p.getDuration();
-                if (d > 0) setDuration(d);
                 setNotice(null);
               }
             },
@@ -189,19 +224,40 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
       });
     return () => {
       cancelled = true;
+      loadGen.current += 1;
       try {
         playerRef.current?.destroy();
       } catch {}
       playerRef.current = null;
       host.replaceChildren();
     };
-    // Mounted once per artist (the parent keys this component); alternates switch inside the same player.
+    // Mounted once per recording (the parent keys this component); alternates switch inside the same player.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    onPhase?.(phase);
-  }, [phase, onPhase]);
+    onPlayback?.({ phase, mode, previewEnded });
+  }, [phase, mode, previewEnded, onPlayback]);
+
+  // Preview boundary guard: runs only while a preview is PLAYING, on the player's own clock.
+  useEffect(() => {
+    if (phase !== "playing" || mode !== "preview" || winStart === undefined || winEnd === undefined) return;
+    const bounds = { startSeconds: winStart, endSeconds: winEnd };
+    const gen = loadGen.current;
+    const id = window.setInterval(() => {
+      const p = playerRef.current;
+      if (!p || gen !== loadGen.current) return window.clearInterval(id);
+      const decision = previewTick(p.getCurrentTime(), bounds, performance.now() - loadedAt.current);
+      if (decision === "stop") {
+        p.pauseVideo();
+        setPreviewEnded(true);
+      } else if (decision === "exit_to_full") {
+        switchMode("full");
+        setNotice("You moved outside the preview, so the full recording is playing now.");
+      }
+    }, GUARD_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [phase, mode, winStart, winEnd]);
 
   // Publishes the playback position for tests and assistive diagnostics (no re-render).
   useEffect(() => {
@@ -213,25 +269,26 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
     return () => window.clearInterval(id);
   }, [phase]);
 
-  const start = (m: Mode) => {
+  /** Loads the current recording in a mode. Always a direct result of a user's press. */
+  const start = (m: ListenMode) => {
     const p = playerRef.current;
     if (!p) return;
-    modeRef.current = m;
-    setMode(m);
+    const w = m === "preview" ? winRef.current : null;
+    loadGen.current += 1;
+    loadedAt.current = performance.now();
+    switchMode(w ? "preview" : "full");
+    setPreviewEnded(false);
     setNotice(null);
-    if (m === "moment" && moment && momentOk) {
-      p.loadVideoById({ videoId: video.videoId, startSeconds: moment.startSeconds, endSeconds: moment.endSeconds });
-    } else {
-      p.loadVideoById({ videoId: video.videoId, startSeconds: 0 });
-    }
+    if (w) p.loadVideoById({ videoId: video.videoId, startSeconds: w.startSeconds, endSeconds: w.endSeconds });
+    else p.loadVideoById({ videoId: video.videoId, startSeconds: 0 }); // full: no end bound, never truncated
   };
 
   const togglePlay = () => {
     const p = playerRef.current;
     if (!p) return;
     if (phase === "playing" || phase === "buffering") p.pauseVideo();
-    else if (phase === "paused") p.playVideo();
-    else start("full");
+    else if (phase === "paused" && !previewEnded) p.playVideo();
+    else start(modeRef.current);
   };
 
   useImperativeHandle(controlsRef, () => ({
@@ -240,21 +297,20 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
     rewind: (seconds: number) => {
       const p = playerRef.current;
       if (!p || (phase !== "playing" && phase !== "paused" && phase !== "buffering")) return;
-      p.seekTo(Math.max(0, p.getCurrentTime() - seconds), true);
+      p.seekTo(rewindTarget(p.getCurrentTime(), seconds, modeRef.current === "preview" ? winRef.current : null), true);
     },
+    playPreview: () => start("preview"),
+    playFull: () => start("full"),
   }));
-
-  const ready = phase !== "loading" && phase !== "failed";
-  const playing = phase === "playing" || phase === "buffering";
-  const momentLabel = moment ? `${clock(moment.startSeconds)}–${clock(moment.endSeconds)}` : "";
 
   const status =
     phase === "loading" ? "Loading the YouTube player…"
     : phase === "failed" ? exhausted ?? "This video can’t play here."
-    : phase === "playing" ? `Playing${mode === "moment" ? ` ${momentLabel}` : ""}: ${video.title} · ${video.channelTitle}`
+    : previewEnded ? "Preview finished. Replay it, or listen in full."
+    : phase === "playing" ? `Playing${mode === "preview" ? " preview" : ""}: ${video.title} · ${video.channelTitle}`
     : phase === "buffering" ? "Loading the video…"
     : phase === "paused" ? "Paused."
-    : phase === "ended" ? (mode === "moment" ? "That was the moment. Replay it, or play the whole track." : "Finished. Replay, or choose another artist.")
+    : phase === "ended" ? "Finished. Replay, or choose another recording."
     : "Ready. Nothing plays until you press Play.";
 
   return (
@@ -267,6 +323,9 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
       data-reported-title={reported.title ?? ""}
       data-reported-channel={reported.author ?? ""}
       data-mode={mode}
+      data-preview-start={win?.startSeconds ?? ""}
+      data-preview-end={win?.endSeconds ?? ""}
+      data-preview-ended={previewEnded ? "true" : "false"}
     >
       {phase === "failed" ? (
         <div className="tp-player__fallback" role="alert">
@@ -288,38 +347,10 @@ export function YouTubePlayer({ artistName, videos, moment, fallbackUrl, fallbac
       <div className="tp-player__frame" hidden={phase === "failed"}>
         <div ref={hostRef} className="tp-player__host" />
       </div>
-      {bare ? null : (
-      <>
-      <p className="tp-player__credit">
-        <span className="tp-player__track">{video.title}</span>
-        <span className="tp-player__channel">
-          {video.channelTitle} · on YouTube{index > 0 ? " · reviewed alternate" : ""}
-        </span>
-      </p>
-      <div className="tp-player__controls" role="group" aria-label={`Playback for ${artistName}`}>
-        <button type="button" className="tp-btn tp-btn--ink-solid tp-btn--sm" disabled={!ready} onClick={togglePlay}>
-          {playing ? "Pause" : phase === "paused" ? "Resume" : "Play"}
-        </button>
-        {moment && momentOk ? (
-          <button type="button" className="tp-btn tp-btn--ink tp-btn--sm" disabled={!ready} onClick={() => start("moment")}>
-            {moment.status === "APPROVED" ? `Play featured moment ${momentLabel}` : `Preview unreviewed moment ${momentLabel}`}
-          </button>
-        ) : null}
-        <button type="button" className="tp-btn tp-btn--ink tp-btn--sm" disabled={!ready || phase === "ready"} onClick={() => start(modeRef.current)}>
-          Replay
-        </button>
-        <a className="tp-btn tp-btn--ghost tp-btn--sm" href={video.watchUrl} target="_blank" rel="noopener noreferrer">
-          Open on YouTube
-        </a>
-      </div>
-      {moment && momentOk && moment.status === "PENDING_REVIEW" ? (
-        <p className="tp-player__review">Review mode: this moment has not been approved by a listener and is never shown to the public.</p>
-      ) : null}
-      </>
-      )}
-      <p className={bare ? "tp-sr" : "tp-player__status"} role="status" aria-live="polite">
+      <p className="tp-sr" role="status" aria-live="polite">
         {notice ?? status}
       </p>
+      {notice && phase !== "failed" ? <p className="sp-player__notice">{notice}</p> : null}
     </div>
   );
 }

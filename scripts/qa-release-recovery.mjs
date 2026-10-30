@@ -42,10 +42,10 @@ try {
   const click = async (name) => { await page.getByRole("button", { name, exact: true }).first().click(); await settle(); };
   await page.goto(base, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: /Start exploring/ }).first().click();
-  check("explicit source chooser", await page.locator('.tp-chip input:checked').count() === 0);
+  check("explicit source chooser", await page.locator('.ah-input input:checked').count() === 0);
   await chooseSource(page, "a music artist");
   await searchAndSelect(page, "Nils Frahm", "Nils Frahm");
-  await page.getByRole("button", { name: /^Begin with/ }).click();
+  await page.getByRole("button", { name: /^Discover music from/ }).click();
   await page.waitForSelector("#tp-question, .sp-stage");
   if (await page.locator("#tp-question").count()) await click("Show my way in");
   await page.waitForSelector(".sp-stage--intro"); await settle();

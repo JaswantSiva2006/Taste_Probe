@@ -10,6 +10,7 @@ import type {
   ListenRequest,
   ListeningFeedbackRequest,
   ListeningState,
+  PreviewSelection,
   SavedDiscovery,
   SongSelection,
   VerifiedSongOption,
@@ -20,7 +21,7 @@ import type {
   StartRequest,
   TurnTrace,
 } from "@/lib/contracts";
-import { domainLabel, enabledSourceDomains, pairAccess, type PairAccess } from "@/lib/contracts";
+import { destinationInScope, domainLabel, enabledSourceDomains, pairAccess, type PairAccess } from "@/lib/contracts";
 import type { AgentMode, BoundedAgent } from "@/lib/agent/bounded";
 import type { QuestionGenerator } from "@/lib/agent/question-generation/proposer";
 import type { SongSelector } from "@/lib/agent/song-selector";
@@ -38,6 +39,8 @@ import {
   withTrackFeedback,
 } from "@/lib/music/listening";
 import { resolveArtistVideo } from "@/lib/music/resolver";
+import { reviewedMappingFor } from "@/lib/music/mappings";
+import { annotatedSegments, authorizedCandidate, deterministicPreview, previewCandidatesFor, selectionOf } from "@/lib/music/preview";
 import type { DynamicLookup } from "@/lib/music/youtube-data";
 import { MAX_REQUESTS_PER_DECISION } from "@/lib/agent/gemini-agent";
 import type { DiscoveryAgent } from "@/lib/agent/types";
@@ -153,7 +156,12 @@ export async function searchAnchors(deps: DiscoveryDeps, q: string, type?: Entit
 export function assertEnabledPair(
   input: Pick<StartRequest, "sourceType" | "targetType">,
   verificationPairs: readonly string[] = [],
+  scope: AppConfig["publicScope"] = "legacy_generic",
 ): PairAccess {
+  // S9.15: the public product discovers music only; other destinations are internal regression paths.
+  if (!destinationInScope(input.targetType, scope)) {
+    throw new AppError("UNSUPPORTED_DOMAIN", 400, "TasteProbe discovers music: choose a starting point and music is the destination");
+  }
   const access = pairAccess(input.sourceType, input.targetType, verificationPairs);
   if (access === "disabled" || access === "unregistered") {
     throw new AppError(
@@ -662,7 +670,7 @@ const nowOf = (deps: DiscoveryDeps) => (deps.now ?? Date.now)();
 export async function startDiscovery(deps: DiscoveryDeps, input: StartRequest): Promise<DiscoveryView> {
   let access: PairAccess;
   try {
-    access = assertEnabledPair(input, deps.config.verification.pairs);
+    access = assertEnabledPair(input, deps.config.verification.pairs, deps.config.publicScope);
   } catch (error) {
     logEvent("info", "discovery.pair_rejected", { requestId: deps.requestId, sourceType: input.sourceType, targetType: input.targetType, capability: pairAccess(input.sourceType, input.targetType) });
     throw error;
@@ -1161,6 +1169,68 @@ async function chooseSong(deps: DiscoveryDeps, state: SessionState, listening: L
 
 type Turn = { deps: DiscoveryDeps; state: SessionState; ledger: LiveLedger; at: number; revision: number };
 
+/** Approved reviewer notes for windows of one recording (registry moments only). */
+const segmentNotes = (artistId: string, videoId: string): string[] =>
+  (reviewedMappingFor(artistId)?.moments ?? []).filter((m) => m.videoId === videoId && m.status === "APPROVED" && m.reviewedBy && m.note.trim()).map((m) => m.note.trim());
+
+/**
+ * S9.15 preview window for the current recording. Gemini is consulted only when at
+ * least two human-reviewed, annotated segments exist AND the user gave explicit
+ * evidence the notes can be compared with; a timing-only window gives the model no
+ * basis, so it is chosen deterministically and labelled "Quick preview". The model
+ * returns a candidate ID only; bounds come from the server's own candidate.
+ */
+async function choosePreview(t: Turn, state: SessionState, l: ListeningState, option: VerifiedSongOption): Promise<{ preview: PreviewSelection | null; gemini: boolean }> {
+  const candidates = previewCandidatesFor(option, reviewedMappingFor(option.artistId)?.moments ?? [], new Date(t.at).toISOString());
+  const grounded = annotatedSegments(candidates);
+  const fallback = (reason: string | null) => ({ preview: deterministicPreview(candidates, reason), gemini: false });
+  if (!candidates.length) return { preview: null, gemini: false };
+  if (grounded.length < 2) return fallback(grounded.length ? "single_reviewed_segment" : "timing_only_candidates");
+  const reactions = trackReactions(l);
+  const artistOf = new Map(l.encounters.map((e) => [e.videoId, e.artistId]));
+  const notes = (kind: "love" | "not_for_me") => [...reactions].filter(([, a]) => a === kind).flatMap(([id]) => segmentNotes(artistOf.get(id) ?? "", id));
+  const evidence = songEvidence(state, l);
+  const loved = notes("love");
+  const disliked = notes("not_for_me");
+  const deps = t.deps;
+  if (!deps.songSelector?.selectPreview) return fallback("llm_unavailable");
+  if (loved.length + disliked.length + evidence.likes.length + evidence.dislikes.length === 0) return fallback("insufficient_evidence");
+  const remaining = deps.config.limits.maxGeminiRequestsPerExploration - (state.session.geminiRequestCount ?? 0) - t.ledger.geminiRequests;
+  if (remaining < 1) return fallback("exploration_gemini_budget_exhausted");
+  t.ledger.geminiRequests += 1; // accounted before execution, failures included
+  t.ledger.geminiDecisionRequests += 1;
+  const r = await deps.songSelector.selectPreview({
+    sessionRef: state.session.sessionId.slice(0, 8),
+    artist: { entityId: option.artistId, name: candidateName(state, option.artistId) },
+    recording: { videoId: option.videoId, title: option.title, durationSeconds: option.durationSeconds! },
+    candidates: grounded.map((c) => ({ id: c.id, note: c.evidence.kind === "human_review" ? (c.evidence.annotation ?? "") : "" })),
+    lovedSegmentNotes: loved,
+    dislikedSegmentNotes: disliked,
+    confirmedLikes: evidence.likes,
+    confirmedDislikes: evidence.dislikes,
+  });
+  t.ledger.tokens.input += r.usage.promptTokens;
+  t.ledger.tokens.output += r.usage.outputTokens;
+  t.ledger.tokens.thinking += r.usage.thoughtTokens;
+  if (r.costUsd === null) t.ledger.geminiCostKnown = false;
+  else t.ledger.geminiCostUsd += r.costUsd;
+  if (!r.ok) return { preview: deterministicPreview(candidates, `gemini_${r.error}`), gemini: true };
+  const chosen = authorizedCandidate(grounded, r.candidateId, option.artistId, option.videoId);
+  if (!chosen) return { preview: deterministicPreview(candidates, "gemini_invalid_choice"), gemini: true };
+  return { preview: selectionOf(chosen, "GEMINI_GROUNDED", r.reasonCode, null), gemini: true };
+}
+
+/** Recomputes the preview only when the presented recording changed (preview/full switching never reaches the server). */
+async function withPreview(t: Turn, state: SessionState): Promise<SessionState> {
+  const l = state.listening;
+  if (!l) return state;
+  const option = l.options.find((o) => o.videoId === l.currentVideoId && o.artistId === l.currentArtistId);
+  if (!option) return l.preview ? { ...state, listening: { ...l, preview: null } } : state;
+  if (l.preview && l.preview.videoId === option.videoId && l.preview.artistId === option.artistId) return state;
+  const { preview, gemini } = await choosePreview(t, state, l, option);
+  return { ...state, listening: { ...l, preview, ...(gemini ? { geminiPreviewRequests: (l.geminiPreviewRequests ?? 0) + 1 } : {}) } };
+}
+
 function encounter(t: Turn, l: ListeningState, artistId: string, options: VerifiedSongOption[], choice: SongChoice, notice: string | null): ListeningState {
   const base = { ...l, options, notice };
   const counted = choice.selection.mode === "GEMINI" ? { ...base, geminiSongRequests: base.geminiSongRequests + 1 } : base;
@@ -1224,7 +1294,7 @@ async function listeningTurn(deps: DiscoveryDeps, sessionToken: string, kind: st
   const t: Turn = { deps, state: loaded.state, ledger, at: nowOf(deps), revision: lease.revision + 1 };
   let next: SessionState;
   try {
-    next = applyLedger(await run(t), ledger);
+    next = applyLedger(await withPreview(t, await run(t)), ledger);
   } catch (error) {
     // Verified prior state is kept; any provider usage already spent stays charged.
     await releaseQuietly(sessions, lease, applyLedger(loaded.state, ledger));
@@ -1376,6 +1446,10 @@ export async function listeningFeedback(deps: DiscoveryDeps, input: ListeningFee
           artist: { qlooId: artistId, name: c.name, provenance: c.evidence.source },
           video: { videoId: current.videoId, title: current.title, channelTitle: current.channelTitle, watchUrl: current.watchUrl, provenance: current.provenance },
           anchor: { qlooId: state.seed.entityId, name: state.seed.name, domain: state.seed.entityType },
+          // Optional verified metadata; the canonical identity stays the video ID above.
+          ...(l.preview && l.preview.videoId === current.videoId
+            ? { preview: { startSeconds: l.preview.startSeconds, endSeconds: l.preview.endSeconds, sourceKind: l.preview.sourceKind } }
+            : {}),
         };
         l = { ...l, saved: [...l.saved, saved].slice(-50), notice: "saved" };
         break;
